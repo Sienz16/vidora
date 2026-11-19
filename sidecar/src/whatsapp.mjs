@@ -34,7 +34,7 @@ async function bounded(operation, signal, ms, onAbort = () => {}) {
   }
 }
 
-export async function connect({ auth, botJid, bot, stop, pairing, log }) {
+export async function connect({ auth, botJid, bot, stop, pairing, log, online }) {
   const socket = makeWASocket({
     auth: auth.state,
     browser: Browsers.ubuntu('Chrome'),
@@ -109,6 +109,7 @@ export async function connect({ auth, botJid, bot, stop, pairing, log }) {
       opened = true
       if (pairing) finish('paired')
       else {
+        online(true)
         log('whatsapp_connected')
         void bot.tick(wa)
         interval = setInterval(() => void bot.tick(wa), 2_000)
@@ -138,6 +139,9 @@ export async function connect({ auth, botJid, bot, stop, pairing, log }) {
     socket.ev.off('connection.update', update)
     socket.ev.off('messages.upsert', upsert)
     await socket.end(undefined)
-    if (opened && !pairing) log('whatsapp_disconnected')
+    if (opened && !pairing) {
+      online(false)
+      log('whatsapp_disconnected')
+    }
   }
 }

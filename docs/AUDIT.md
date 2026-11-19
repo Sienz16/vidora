@@ -97,3 +97,21 @@ Scope explicitly not audited:
 ```
 
 Link every finding to a concrete file and line when code exists. Mark a phase approved only when no required fix remains and the evidence supports the claimed scope.
+
+## Automated verification on 2026-11-19
+
+| Check | Result |
+| --- | --- |
+| `cargo fmt --check` and `cargo clippy --locked --all-targets -- -D warnings` | Passed |
+| `cargo test --locked` | 15 passed, including seven API tests |
+| `npm ci --prefix sidecar --ignore-scripts` and `npm test --prefix sidecar` | Lockfile installation passed. Nine tests passed on Node.js 24.22.3. |
+| `docker build --target test .` and `docker build --target test ./sidecar` | Linux ARM64 images passed 15 Rust tests with FFmpeg 9.0.2 and nine sidecar tests with Node.js 24.22.3. |
+| `bash scripts/check-compose.sh` | Both runtime images built and passed configuration and smoke checks on Docker 29.10.0 with Compose 5.8.0. The checks verified effective resource limits, private networking, generated clip conformance, ordered acknowledgement, deduplication, and cleanup. |
+| `cargo audit` and `npm audit --prefix sidecar --omit=dev` | No reported dependency vulnerabilities |
+| Trivy 0.76.2 image scan | Zero high or critical findings in either runtime image. API reported 47 medium, 14 low, and three unknown. Sidecar reported 47 medium, 13 low, and three unknown. |
+| Linux disk pressure | A 2 MiB upload to a 1 MiB data mount ended with `storage_error` while the health endpoint stayed available. |
+| Linux shutdown and restart | SIGTERM during a partial upload exited successfully, removed the work files, and left the message eligible for retry after restart. |
+
+The container uses FFmpeg 9.0.2 to include fixes unavailable in the prior 8.x build. The official tarball signature matched the FFmpeg release key, and the Dockerfile pins its SHA-256. Trivy does not inventory the source-built FFmpeg binary. See the [upstream release](https://ffmpeg.org/download.html) and the [Debian security record](https://security-tracker.debian.org/tracker/CVE-2026-70632).
+
+Live WhatsApp authorization, delivery, device reconnection, and Status quality still require a secondary-account trial. VPS deployment is outside the current work.

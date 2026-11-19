@@ -34,10 +34,15 @@ Test owner allowlisting, group rejection, unknown senders, unsupported messages,
 ## Deployment checks
 
 ```bash
-docker compose config
+docker compose config --quiet
+docker build --target test .
+docker build --target test ./sidecar
+bash scripts/check-compose.sh
 ```
 
-Also build both images, run the integration suite inside the Compose environment, inspect published ports, network attachments, and writable mounts, and verify the effective process user and resource limits. Confirm the Rust/API container has no external network route while the sidecar can reach WhatsApp. Save dependency and container scan results as audit evidence without treating a clean scan as a guarantee.
+Run the smoke test on the Linux Docker host with cgroup v2. It builds both images in a disposable Compose project, verifies effective limits and isolation, processes generated media through the real Node HTTP client and Rust API, then checks delivery acknowledgement, deduplication, and disk cleanup. It probes the public WhatsApp web endpoint for network reachability without linking either fictional number.
+
+Record `cargo audit`, `npm audit --prefix sidecar --omit=dev`, and vulnerability scan results for both runtime images. Tool-only test stages are separate from the production images.
 
 ## Generated fixture matrix
 

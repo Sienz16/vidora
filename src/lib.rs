@@ -76,6 +76,20 @@ impl Tools {
             ffprobe: find("ffprobe")?,
         })
     }
+
+    pub async fn check(&self, directory: &Path) -> Result<(), Error> {
+        for executable in [&self.ffmpeg, &self.ffprobe] {
+            tool::run(
+                executable,
+                directory,
+                &media::args(&["-version"]),
+                Duration::from_secs(5),
+                Error::ToolUnavailable,
+            )
+            .await?;
+        }
+        Ok(())
+    }
 }
 
 #[derive(Debug, Serialize)]

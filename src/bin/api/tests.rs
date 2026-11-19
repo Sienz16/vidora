@@ -326,6 +326,69 @@ async fn reconciliation_and_retention_remove_abandoned_media() {
 }
 
 #[tokio::test]
+async fn restart_clears_interrupted_uploads_and_fails_interrupted_encodes() {
+    for processing in [false, true] {
+        let root = tempfile::tempdir().unwrap();
+        let api = Api::open(root.path(), TOKEN).unwrap();
+        let hash = message_hash(MESSAGE).unwrap();
+        let Reservation::New(id) = api.store.lock().unwrap().reserve(&hash).unwrap() else {
+            panic!("job should be new");
+        };
+        if processing {
+            assert!(api.store.lock().unwrap().processing(&id).unwrap());
+        }
+        fs::write(api.work.join("partial"), b"private test media").unwrap();
+        private_dir(&api.media.join(&id)).unwrap();
+        drop(api);
+
+        let api = Api::open(root.path(), TOKEN).unwrap();
+        assert!(api.store.lock().unwrap().active().unwrap().is_none());
+        assert_eq!(fs::read_dir(&api.work).unwrap().count(), 0);
+        assert_eq!(fs::read_dir(&api.media).unwrap().count(), 0);
+        let job = api.store.lock().unwrap().by_message(&hash).unwrap();
+        if processing {
+            assert_eq!(
+                job.unwrap().error.as_deref(),
+                Some("processing_interrupted")
+            );
+        } else {
+            assert!(job.is_none(), "the owner may retry an interrupted upload");
+        }
+    }
+}
+
+#[tokio::test]
+async fn retention_sweep_revokes_delivery_while_a_reader_is_open() {
+    let root = tempfile::tempdir().unwrap();
+    let api = Api::open(root.path(), TOKEN).unwrap();
+    let id = seed_ready(&api, MESSAGE);
+    let app = router(api.clone());
+    let path = format!("/internal/v1/jobs/{id}/artifacts/0");
+    let open = request(&app, "GET", &path, true, &[], Body::empty()).await;
+    assert_eq!(open.status(), StatusCode::OK);
+    rusqlite::Connection::open(root.path().join("jobs.db"))
+        .unwrap()
+        .execute(
+            "UPDATE jobs SET expires = unixepoch() - 1 WHERE id = ?1",
+            [&id],
+        )
+        .unwrap();
+    api.sweep().unwrap();
+    assert_eq!(fs::read_dir(&api.media).unwrap().count(), 0);
+    assert_eq!(
+        request(&app, "GET", &path, true, &[], Body::empty())
+            .await
+            .status(),
+        StatusCode::NOT_FOUND
+    );
+    assert_eq!(
+        delivery_action(&app, &id, 0, "begin").await.status(),
+        StatusCode::CONFLICT
+    );
+    assert_eq!(to_bytes(open.into_body(), 16).await.unwrap(), "first");
+}
+
+#[tokio::test]
 async fn streams_a_generated_clip_through_the_real_worker() {
     let fixture = tempfile::tempdir().unwrap();
     let source = fixture.path().join("sample.mp4");

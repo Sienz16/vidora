@@ -1,4 +1,5 @@
 import process from 'node:process'
+import { rmSync, writeFileSync } from 'node:fs'
 import { isAbsolute } from 'node:path'
 import { setTimeout as delay } from 'node:timers/promises'
 import { jidNormalizedUser } from '@whiskeysockets/baileys'
@@ -12,6 +13,14 @@ const args = process.argv.slice(2)
 const pairing = args.length === 1 && args[0] === '--pair'
 const stopping = new AbortController()
 process.umask(0o077)
+// The pinned Signal dependency also logs session objects outside the Baileys logger.
+for (const method of ['log', 'info', 'warn', 'error', 'debug', 'trace', 'dir']) {
+  console[method] = () => {}
+}
+process.once('uncaughtException', () => {
+  log('sidecar_uncaught_failure')
+  process.exit(1)
+})
 process.once('SIGINT', () => stopping.abort())
 process.once('SIGTERM', () => stopping.abort())
 process.on('unhandledRejection', () => {
@@ -28,8 +37,22 @@ async function run() {
   const botJid = phoneJid(process.env.BOT_WHATSAPP_NUMBER)
   const directory = process.env.BAILEYS_AUTH_DIR
   const token = process.env.INTERNAL_API_TOKEN
+  const marker = process.env.VIDORA_READY_FILE
   if (owner === botJid || !directory || !isAbsolute(directory)
-    || !token || !/^[!-~]{32,}$/.test(token)) throw new Error('invalid configuration')
+    || !token || !/^[!-~]{32,}$/.test(token)
+    || (marker && !isAbsolute(marker))) throw new Error('invalid configuration')
+  const online = (connected) => {
+    if (!marker || pairing) return
+    try {
+      if (connected) writeFileSync(marker, '')
+      else rmSync(marker, { force: true })
+    } catch {
+      log('sidecar_health_marker_failed')
+      process.exitCode = 1
+      stopping.abort()
+    }
+  }
+  online(false)
   const api = createApi(process.env.RUST_API_URL, token)
   const auth = openAuth(directory)
   const bot = createBot({ api, owner, stop: stopping.signal, log })
@@ -45,7 +68,7 @@ async function run() {
     let retry = 1_000
     while (!stop.aborted) {
       const { reason, opened } = await connect({
-        auth, botJid, bot, stop, log,
+        auth, botJid, bot, stop, log, online,
         pairing: pairing ? (code) => process.stdout.write(`Pairing code: ${code}\n`) : undefined,
       })
       await bot.drained()

@@ -4,7 +4,6 @@ import { ApiError, MAX_INPUT } from './api.mjs'
 const ACTIVE = new Set(['receiving', 'processing', 'ready', 'delivering'])
 const HELP = 'Send a video as a document (up to 300 MiB and 10 minutes). I’ll return MP4 parts for you to post manually. Use /status to check the current job.'
 const BUSY = 'A video is already in progress. Try again when it finishes.'
-const FAILED = 'This job failed. Use /status for details.'
 const UNCERTAIN = 'Delivery could not be confirmed. Check which parts reached this chat before resubmitting the video.'
 const STATES = {
   receiving: 'Receiving your video.',
@@ -12,7 +11,17 @@ const STATES = {
   ready: 'Your clips are ready to send.',
   delivering: 'Sending your clips.',
   delivered: 'All clips were sent.',
-  failed: FAILED,
+}
+
+function describe(job) {
+  if (job?.state !== 'failed') return STATES[job?.state] ?? 'No video job yet.'
+  switch (job.error) {
+    case 'delivery_uncertain': return UNCERTAIN
+    case 'delivery_failed': return 'Your clips were prepared, but delivery failed.'
+    case 'processing_failed': return 'I couldn’t process that video. Check that it is playable, SDR, and no longer than 10 minutes.'
+    case 'expired': return 'Your clips expired before delivery. Send the video again to start a new job.'
+    default: return 'The video job failed. Send the video again to retry.'
+  }
 }
 
 export function phoneJid(number) {
@@ -143,7 +152,7 @@ export function createBot({ api, owner, stop, log = () => {} }) {
         await reply(wa, 'Status is temporarily unavailable.')
         return
       }
-      await reply(wa, job?.error === 'delivery_uncertain' ? UNCERTAIN : STATES[job?.state] ?? 'No video job yet.')
+      await reply(wa, describe(job))
       return
     }
     if (!document) return
@@ -217,7 +226,7 @@ export function createBot({ api, owner, stop, log = () => {} }) {
         const job = await api.status(wa.signal)
         if (job?.state === 'ready' || job?.state === 'delivering') await deliver(job, wa)
         if (job?.state === 'failed' && job.id !== lastFailure
-          && await reply(wa, job.error === 'delivery_uncertain' ? UNCERTAIN : FAILED)) {
+          && await reply(wa, describe(job))) {
           lastFailure = job.id
         }
       })

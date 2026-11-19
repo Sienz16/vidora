@@ -111,6 +111,17 @@ test('only authenticated owner direct messages and supported documents start job
   assert.equal(counters.uploads, 1)
 })
 
+test('status describes a processing failure', async () => {
+  const { bot, transport, job, notices } = fixtures()
+  const worker = bot()
+  const wa = transport()
+  await worker.onUpsert(incoming(message('job', owner)), wa)
+  job().state = 'failed'
+  job().error = 'processing_failed'
+  await worker.onUpsert(incoming(message('status', owner, { conversation: '/status' })), wa)
+  assert.match(notices.at(-1), /couldn’t process that video/)
+})
+
 test('deduplicates message replay across sidecar instances and reports busy', async () => {
   const { bot, transport, counters, notices } = fixtures()
   const wa = transport()

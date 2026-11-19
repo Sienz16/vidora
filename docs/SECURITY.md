@@ -14,6 +14,7 @@ Self-hosting reduces dependence on third-party apps but does not prove the syste
 - Do not auto-post Status updates, auto-forward media, or expose bot functionality to contacts.
 - Run exactly one Baileys sidecar using a given session. A second instance can disconnect or corrupt the session.
 - Treat Baileys as unofficial and expect breaking changes, logout, or account restriction.
+- The sidecar mutes dependency console output and the Baileys logger. The pinned Signal dependency can print session objects directly to the console. Vidora emits its own fixed operational events.
 
 ## Input and parser controls
 
@@ -29,8 +30,10 @@ Self-hosting reduces dependence on third-party apps but does not prove the syste
 
 - Run Rust, Node.js, and FFmpeg as non-root users.
 - Use read-only container root filesystems where practical, with only required writable volumes.
+- Production images use pinned, shell-free runtime bases. Build tools and npm are confined to build stages.
 - Attach the Rust/API container only to an internal processing network with no external route; only the sidecar receives a separate WhatsApp egress network.
 - Restrict FFmpeg to local file processing and approved protocols. Do not grant extra capabilities for per-process network-namespace creation.
+- The container build compiles FFmpeg without network support and enables only file and pipe protocols. Production processing arguments further restrict media inputs to the file protocol.
 - Apply CPU, memory, process-count, file-size, and wall-clock limits. One job must not exhaust the VPS.
 - Use separate volumes and permissions for Rust media data and Baileys credentials.
 - Do not publish sidecar or internal API ports to the host or internet.

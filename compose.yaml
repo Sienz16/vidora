@@ -1,0 +1,74 @@
+services:
+  api:
+    build:
+      context: .
+      target: production
+    init: true
+    read_only: true
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+    environment:
+      VIDORA_BIND_IP: 0.0.0.0
+      INTERNAL_API_TOKEN: ${INTERNAL_API_TOKEN:?set INTERNAL_API_TOKEN}
+    volumes:
+      - media:/var/lib/vidora
+    networks: [processing]
+    pids_limit: 128
+    cpus: 1.75
+    mem_limit: 2g
+    stop_grace_period: 30s
+    restart: unless-stopped
+    healthcheck:
+      test: [CMD, vidora-api, --healthcheck]
+      interval: 10s
+      timeout: 3s
+      retries: 3
+  whatsapp:
+    build:
+      context: ./sidecar
+      target: production
+    init: true
+    read_only: true
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+    environment:
+      RUST_API_URL: http://api:8080
+      BAILEYS_AUTH_DIR: /var/lib/vidora-auth
+      INTERNAL_API_TOKEN: ${INTERNAL_API_TOKEN:?set INTERNAL_API_TOKEN}
+      OWNER_WHATSAPP_NUMBER: ${OWNER_WHATSAPP_NUMBER:?set OWNER_WHATSAPP_NUMBER}
+      BOT_WHATSAPP_NUMBER: ${BOT_WHATSAPP_NUMBER:?set BOT_WHATSAPP_NUMBER}
+      VIDORA_READY_FILE: /tmp/vidora-connected
+    volumes:
+      - session:/var/lib/vidora-auth
+    tmpfs:
+      - /tmp:rw,nosuid,nodev,noexec,size=128m,uid=65532,gid=65532,mode=0700
+    networks:
+      processing: {}
+      whatsapp-egress:
+        gw_priority: 1
+    depends_on:
+      api:
+        condition: service_healthy
+    pids_limit: 64
+    cpus: 0.5
+    mem_limit: 768m
+    stop_grace_period: 30s
+    restart: unless-stopped
+    healthcheck:
+      test:
+        - CMD
+        - node
+        - -e
+        - 'require("node:fs").accessSync(process.env.VIDORA_READY_FILE); fetch(process.env.RUST_API_URL + "/health", {signal: AbortSignal.timeout(1500)}).then(r => { if (r.status !== 204) process.exitCode = 1 }).catch(() => { process.exitCode = 1 })'
+      interval: 15s
+      timeout: 3s
+      retries: 3
+networks:
+  processing:
+    internal: true
+    driver_opts:
+      com.docker.network.bridge.gateway_mode_ipv4: isolated
+  whatsapp-egress: {}
+volumes:
+  media: {}
+  session: {}

@@ -4,7 +4,8 @@ mod tests;
 
 use std::{
     env, fs, io,
-    net::{IpAddr, Ipv4Addr, SocketAddr},
+    io::{Read, Write},
+    net::{IpAddr, Ipv4Addr, SocketAddr, TcpStream},
     os::unix::fs::{DirBuilderExt, OpenOptionsExt, PermissionsExt},
     path::{Path, PathBuf},
     sync::{Arc, Mutex},
@@ -33,6 +34,7 @@ use vidora::{MAX_INPUT, Processor, Tools};
 
 const UPLOAD_TIMEOUT: Duration = Duration::from_secs(90);
 const ARTIFACT_TIMEOUT: Duration = Duration::from_secs(45);
+const PORT: u16 = 8080;
 
 struct Api {
     store: Mutex<Store>,
@@ -568,11 +570,14 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
         .map(PathBuf::from)
         .ok_or("missing data directory")?;
     let token = env::var("INTERNAL_API_TOKEN")?;
+    if !root.is_absolute() {
+        return Err("data directory must be absolute".into());
+    }
     let ip =
         env::var("VIDORA_BIND_IP").map_or(Ok(IpAddr::V4(Ipv4Addr::LOCALHOST)), |ip| ip.parse())?;
     let api = Api::open(&root, &token)?;
-    Tools::from_path()?;
-    let listener = tokio::net::TcpListener::bind(SocketAddr::new(ip, 8080)).await?;
+    Tools::from_path()?.check(&api.work).await?;
+    let listener = tokio::net::TcpListener::bind(SocketAddr::new(ip, PORT)).await?;
     let scheduler = api.clone();
     api.tasks.spawn(async move {
         let mut sweep = tokio::time::interval(Duration::from_secs(30));
@@ -588,13 +593,16 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
         }
     });
     eprintln!("api_started");
-    let stop = api.stop.clone();
-    let result = axum::serve(listener, router(api.clone()))
-        .with_graceful_shutdown(async move {
-            stop_signal().await;
-            stop.cancel();
-        })
-        .await;
+    let server = axum::serve(listener, router(api.clone()))
+        .with_graceful_shutdown(api.stop.clone().cancelled_owned());
+    let mut server = std::pin::pin!(std::future::IntoFuture::into_future(server));
+    let result = tokio::select! {
+        result = &mut server => result,
+        _ = stop_signal() => {
+            api.stop.cancel();
+            tokio::time::timeout(Duration::from_secs(8), &mut server).await.unwrap_or(Ok(()))
+        }
+    };
     api.stop.cancel();
     api.tasks.close();
     api.tasks.wait().await;
@@ -615,8 +623,32 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
     Ok(())
 }
 
+fn healthcheck() -> io::Result<()> {
+    let timeout = Duration::from_secs(1);
+    let addr = SocketAddr::new(Ipv4Addr::LOCALHOST.into(), PORT);
+    let mut connection = TcpStream::connect_timeout(&addr, timeout)?;
+    connection.set_read_timeout(Some(timeout))?;
+    connection.set_write_timeout(Some(timeout))?;
+    connection
+        .write_all(b"GET /health HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n")?;
+    let mut status = [0; 12];
+    connection.read_exact(&mut status)?;
+    if &status != b"HTTP/1.1 204" {
+        return Err(io::Error::other("API unhealthy"));
+    }
+    Ok(())
+}
+
 #[tokio::main(flavor = "current_thread")]
 async fn main() -> std::process::ExitCode {
+    let mut args = env::args_os().skip(1);
+    if let Some(command) = args.next() {
+        return if command == "--healthcheck" && args.next().is_none() && healthcheck().is_ok() {
+            std::process::ExitCode::SUCCESS
+        } else {
+            std::process::ExitCode::FAILURE
+        };
+    }
     if run().await.is_err() {
         eprintln!("api_startup_or_shutdown_failed");
         return std::process::ExitCode::FAILURE;

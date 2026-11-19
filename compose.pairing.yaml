@@ -1,0 +1,5 @@
+services:
+  whatsapp:
+    command: ["node", "src/main.mjs", "--pair"]
+    logging:
+      driver: none
