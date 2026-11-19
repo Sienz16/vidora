@@ -5,7 +5,7 @@
 ![FFmpeg 8](https://img.shields.io/badge/FFmpeg-8-007808?style=flat-square&logo=ffmpeg)
 ![Tokio](https://img.shields.io/badge/Async-Tokio-334155?style=flat-square)
 
-Vidora prepares short MP4 clips for WhatsApp Status. The local CLI and authenticated processing API are available. The planned self-hosted bot will accept a video document from one owner and return the clips in order. The owner posts them to Status manually.
+Vidora prepares short MP4 clips for WhatsApp Status. Run the Rust CLI locally or use the self-hosted bot workflow. The bot accepts video documents from one owner and sends the parts in order. The owner posts them to Status manually. The sidecar has been tested with mocks and needs a live secondary-account trial.
 
 ## What Phase 1 does
 
@@ -35,11 +35,11 @@ Replace `./sample.mp4` with your input video. On success, the CLI prints a redac
 | --- | --- | --- |
 | 1 · Implemented | Rust 2024, Tokio, FFmpeg 8 | Local validation, transcoding, segmentation, and cleanup |
 | 2 · Implemented | Rust, axum, SQLite | Authenticated internal API, durable jobs, and restart recovery |
-| 3 · Planned | Node.js 24, Baileys | Owner-only WhatsApp access and ordered clip delivery |
+| 3 · Implemented | Node.js 24, Baileys | Owner-only WhatsApp access and ordered clip delivery |
 | 4 · Planned | Docker Compose | Private networking, resource limits, and container hardening |
 | 5–6 · Planned | Dedicated secondary WhatsApp account, VPS | Controlled quality trial followed by deployment |
 
-Rust owns media processing and job state. The Node.js sidecar will hold the WhatsApp session and handle messaging. See the [architecture](docs/ARCHITECTURE.md) and the [phase audit gates](docs/IMPLEMENTATION-PLAN.md).
+Rust owns media processing and job state. The Node.js sidecar holds the WhatsApp session and handles messaging. See the [architecture](docs/ARCHITECTURE.md) and the [phase review criteria](docs/IMPLEMENTATION-PLAN.md).
 
 ## Verify locally
 
@@ -49,6 +49,8 @@ Run the Rust checks with `ffmpeg` and `ffprobe` available. The tests generate th
 cargo fmt --check
 cargo clippy --locked --all-targets -- -D warnings
 cargo test --locked
+npm ci --prefix sidecar --ignore-scripts
+npm test --prefix sidecar
 ```
 
 ## Read in this order

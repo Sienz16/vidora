@@ -25,8 +25,8 @@ Add integration coverage for stream bounds, ffprobe validation, argument constru
 Use the lockfile and project scripts once created:
 
 ```bash
-npm ci
-npm test
+npm ci --prefix sidecar --ignore-scripts
+npm test --prefix sidecar
 ```
 
 Test owner allowlisting, group rejection, unknown senders, unsupported messages, message deduplication, download limits, reconnect behavior, ordered delivery, per-artifact acknowledgement, and bounded retries without connecting a real account.

@@ -60,6 +60,10 @@ Responsibilities:
 
 Use Node.js 24, Baileys, and native `fetch`/streams where practical. Do not add a second web framework solely for outbound HTTP requests.
 
+The sidecar checks the direct chat's authenticated phone JID or its Baileys-provided LID mapping. It accepts video documents with a declared length and plaintext SHA-256. It downloads from verified WhatsApp media hosts over TLS, checks the media MAC, and streams plaintext to the API, which checks the length and hash before processing. The sidecar prepares each document before reserving its send, waits for the WhatsApp server acknowledgement, and retries the internal acknowledgement independently. A missing server acknowledgement leaves the send uncertain and prevents a blind replay. A server acknowledgement does not establish playback or a read receipt.
+
+The sidecar keeps authentication and Signal keys in its own SQLite database. An OS-backed SQLite lock prevents a second process from opening the same session, including during pairing. Session data and media remain on separate storage.
+
 ## Internal API
 
 Exact field schemas may be implemented in code, but preserve these semantics:

@@ -3,3 +3,4 @@
 /data/
 /baileys-auth/
 /.env
+/sidecar/node_modules/
