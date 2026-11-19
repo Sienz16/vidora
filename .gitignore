@@ -1,0 +1,5 @@
+/target/
+/output/
+/data/
+/baileys-auth/
+/.env

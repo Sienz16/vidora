@@ -1,0 +1,93 @@
+# Requirements
+
+## Goal
+
+Provide a private bot workflow equivalent to the useful behavior visible in the supplied screenshot:
+
+1. The owner sends a video as a WhatsApp document to a dedicated bot number.
+2. The bot acknowledges the job and reports bounded progress states.
+3. The service validates and transcodes the video with FFmpeg.
+4. The bot returns Status-ready MP4 clips in order.
+5. The owner manually posts the clips to WhatsApp Status.
+
+The project does not guarantee that WhatsApp will skip recompression.
+
+## Actors and trust boundaries
+
+- **Owner:** the single explicitly allowlisted WhatsApp account permitted to use the bot.
+- **Bot number:** a dedicated secondary WhatsApp number linked through Baileys.
+- **WhatsApp sidecar:** untrusted-input boundary; handles protocol messages and media download.
+- **Rust service:** validates every sidecar request and owns all processing.
+- **VPS:** trusted to process media temporarily. The VPS provider can theoretically access host storage; this is not an on-device privacy solution.
+
+## MVP functional requirements
+
+### Input and authorization
+
+- Accept one video document per job.
+- Accept jobs only when the authenticated WhatsApp sender matches `OWNER_WHATSAPP_NUMBER`.
+- Reject group messages, broadcasts, unknown senders, forwarded commands, and unsolicited media from other accounts.
+- Deduplicate WhatsApp message IDs so retries do not create duplicate jobs or deliveries.
+- Allow one active job for the owner. Additional jobs receive a concise busy response.
+- Support `/help` and `/status`; no other commands are required for MVP.
+
+### Validation
+
+- Enforce a maximum declared and received input size of 300 MiB.
+- Enforce a maximum source duration of 10 minutes and a maximum of 32 output clips.
+- Inspect the downloaded file with ffprobe before encoding.
+- Require exactly one video stream and at most one audio stream; reject unsupported additional streams for MVP.
+- Reject corrupt, encrypted, non-video, truncated, or timed-out inputs without starting an encode.
+- Treat original filenames as display metadata only. Never use them as filesystem paths or command fragments.
+
+### Processing
+
+- Implement the `hd29` candidate profile in `ENCODING.md` as the default and only MVP output profile.
+- Preserve aspect ratio using scale-and-pad; do not stretch or upscale beyond the selected profile canvas.
+- Use FFmpeg through an argument-array process API with no shell.
+- Run one encode at a time with CPU, memory, output-size, and wall-clock limits.
+- Validate every output with ffprobe and the profile constraints before delivery.
+- Record the exact FFmpeg version, arguments, input metadata, output metadata, durations, sizes, and errors in a redacted job record.
+
+### Delivery and cleanup
+
+- Return clips in sequence with a concise part number, for example `Part 1/3`.
+- Retry bounded transient delivery failures without re-encoding or duplicating successful sends.
+- Report terminal failure clearly; never report success before every output is validated and delivered.
+- Delete input, intermediate, and output media within 15 minutes after successful delivery and within 30 minutes after failure or abandonment.
+- Keep only minimal redacted job metadata after media deletion.
+
+## Non-functional requirements
+
+- One Rust worker and one WhatsApp sidecar instance.
+- No public API, public WhatsApp sidecar port, ads, analytics, tracking, or third-party media storage.
+- No WhatsApp session material in source control, build logs, container images, or unencrypted backups.
+- Reproducible dependency installation from lockfiles.
+- Actionable structured logs with secrets and personal identifiers redacted.
+- Graceful shutdown must stop accepting new work and clean temporary media without corrupting persistent session state.
+
+## Explicitly out of scope for MVP
+
+- Automatic posting to WhatsApp Status
+- Public or multi-user access
+- A web interface
+- Photo-to-video, music, editing, stickers, or AI features
+- Copying PURESTATUS branding, proprietary code, or assets
+- Forced 60 fps output
+- Guaranteed quality parity, a compression bypass, or official WhatsApp support
+- The `long59` and `hd90` profiles until `hd29` passes manual quality tests
+
+## MVP acceptance criteria
+
+MVP is accepted only when all of these are demonstrated:
+
+1. An unauthorized sender and a group message cannot start a job.
+2. The owner can send a supported document and receive all valid clips in order.
+3. Duplicate message delivery does not duplicate processing or completed output delivery.
+4. Corrupt, oversized, over-duration, and maliciously named inputs are rejected safely.
+5. Outputs satisfy the selected codec, pixel format, resolution, frame-rate, duration, and size constraints.
+6. FFmpeg has no external network route, is restricted to local file processing, and runs as an unprivileged, resource-bounded process.
+7. Media cleanup is verified after success, failure, timeout, cancellation, and restart.
+8. Automated tests and the manual quality matrix in `TESTING.md` pass, with device and WhatsApp versions recorded.
+9. No credentials, session data, personal media, or real phone numbers appear in the repository or logs.
+10. Documentation reports actual results without unsupported quality claims.
