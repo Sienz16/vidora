@@ -19,7 +19,7 @@ use tokio::{
     time::timeout,
 };
 
-const MAX_INPUT: u64 = 300 * 1024 * 1024;
+pub const MAX_INPUT: u64 = 300 * 1024 * 1024;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "snake_case")]

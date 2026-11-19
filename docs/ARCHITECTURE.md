@@ -42,7 +42,7 @@ Responsibilities:
 - Validate outputs and serve them only through authenticated internal artifact endpoints.
 - Track delivery acknowledgement and clean media on every terminal path.
 
-Recommended baseline: stable Rust, `axum`, `tokio`, `sqlx` with SQLite, `tracing`, `uuid`, and `sha2`. Avoid additional frameworks unless a requirement cannot be met simply.
+The API uses `axum`, `tokio`, `rusqlite` with bundled SQLite, `uuid`, and `sha2`. The short database operations run on one worker and large bodies stream through Tokio.
 
 ### Node.js sidecar
 
@@ -67,10 +67,11 @@ Exact field schemas may be implemented in code, but preserve these semantics:
 | Endpoint | Purpose |
 | --- | --- |
 | `GET /health` | Minimal health without personal or session information |
-| `POST /internal/v1/jobs` | Stream one media body with message ID, display name, and SHA-256 metadata |
+| `POST /internal/v1/jobs` | Stream one media body with `Content-Length`, `X-Message-Id`, `X-Content-Sha256` (lowercase hex), and optional `X-Display-Name` |
+| `GET /internal/v1/jobs` | Read the active or latest job, or look up a specific message using `X-Message-Id` |
 | `GET /internal/v1/jobs/:id` | Return state, progress, validated artifact metadata, or a safe error |
 | `GET /internal/v1/jobs/:id/artifacts/:index` | Stream one validated clip to the authenticated sidecar |
-| `POST /internal/v1/jobs/:id/delivery` | Record per-artifact delivery acknowledgement idempotently |
+| `POST /internal/v1/jobs/:id/delivery` | Begin a send or record its acknowledgement with `{"action":"begin","index":0}` or `{"action":"ack","index":0}` |
 | `POST /internal/v1/jobs/:id/terminal` | Record a terminal sidecar failure when delivery cannot continue |
 
 Requirements:
@@ -79,6 +80,8 @@ Requirements:
 - The Rust service binds to the private Compose network only; published host ports are not required for MVP.
 - Artifact indices and job IDs are validated server-side. Paths are resolved from server-owned records, never raw request strings.
 - Request bodies and downloads are streamed and bounded; buffering an entire 300 MiB video in memory is not acceptable.
+- Job creation returns 202 for a new upload, 200 for a duplicate, and 409 when another job is active. The display name is validated and discarded. SQLite retains a SHA-256 digest of the message ID for idempotency.
+- Artifact indices start at zero. The API serves only the next unacknowledged artifact. A durable `begin` prevents a second send attempt after an ambiguous crash or disconnect. Transient preparation failures can be retried before `begin`, and `ack` can be retried afterwards.
 
 ## Job state
 
@@ -90,12 +93,13 @@ RECEIVING → PROBING → ENCODING → READY → DELIVERING → DELIVERED → CL
      └──────────┴──────────┴─────────┴──────────┴→ FAILED → CLEANED
 ```
 
-A restart reconciles interrupted jobs against actual files and delivery acknowledgements. Unknown or partial media is cleaned rather than assumed valid.
+The API uses one `processing` state for probing and encoding. A restart discards partial uploads and processing directories. An interrupted encode fails, and a ready or partially delivered job resumes if its validated files are still present. An in-flight send with an unknown outcome fails with `delivery_uncertain`. Graceful API shutdown cancels active work and removes its media. Completed and failed jobs retain minimal deduplication metadata. Uncollected ready clips expire after 20 minutes, with a sweep every 30 seconds while the service runs.
 
 ## Storage
 
 - `data/jobs.db`: redacted durable job and idempotency metadata.
-- `data/jobs/<random-uuid>/`: short-lived input, outputs, and processing metadata.
+- `data/work/`: short-lived uploads and validated processing workspace.
+- `data/media/<random-uuid>/`: short-lived validated outputs. Detailed redacted encoding metadata stays in SQLite until terminal cleanup.
 - `baileys-auth/`: persistent WhatsApp session, accessible only to the sidecar.
 
 Do not place Baileys authentication inside the Rust media volume or container image.

@@ -5,7 +5,7 @@
 ![FFmpeg 8](https://img.shields.io/badge/FFmpeg-8-007808?style=flat-square&logo=ffmpeg)
 ![Tokio](https://img.shields.io/badge/Async-Tokio-334155?style=flat-square)
 
-Vidora prepares short MP4 clips for WhatsApp Status. The local CLI is available in Phase 1. The planned self-hosted bot will accept a video document from one owner and return the clips in order. The owner posts them to Status manually.
+Vidora prepares short MP4 clips for WhatsApp Status. The local CLI and authenticated processing API are available. The planned self-hosted bot will accept a video document from one owner and return the clips in order. The owner posts them to Status manually.
 
 ## What Phase 1 does
 
@@ -34,7 +34,7 @@ Replace `./sample.mp4` with your input video. On success, the CLI prints a redac
 | Phase | Stack | Scope |
 | --- | --- | --- |
 | 1 · Implemented | Rust 2024, Tokio, FFmpeg 8 | Local validation, transcoding, segmentation, and cleanup |
-| 2 · Planned | Rust, axum, SQLite | Authenticated internal API, durable jobs, and restart recovery |
+| 2 · Implemented | Rust, axum, SQLite | Authenticated internal API, durable jobs, and restart recovery |
 | 3 · Planned | Node.js 24, Baileys | Owner-only WhatsApp access and ordered clip delivery |
 | 4 · Planned | Docker Compose | Private networking, resource limits, and container hardening |
 | 5–6 · Planned | Dedicated secondary WhatsApp account, VPS | Controlled quality trial followed by deployment |
@@ -76,4 +76,4 @@ cargo test --locked
 
 ## Implementation handoff
 
-An implementing agent should complete only one phase in `docs/IMPLEMENTATION-PLAN.md`, then report changed files, commands run, test results, deviations, and unresolved questions. The auditing agent must inspect the actual files and test evidence before approving the next phase.
+Commit each completed implementation phase separately, with test evidence and unresolved issues for review. Live linking and deployment have separate approval gates.

@@ -45,7 +45,7 @@ Before changing files, read:
 - Run the checks required for the current phase and `docs/TESTING.md`.
 - Never mark work complete with failing, unrun, or unverified tests.
 - Distinguish observations, inferences, and unknowns. Do not claim a compression bypass, official WhatsApp support, or measured similarity without evidence.
-- Stop after one implementation phase for audit. Do not commit, push, tag, release, deploy, or link WhatsApp without explicit user approval.
+- Keep each completed implementation phase in a separate commit for review when continuing across phases. Do not commit, push, tag, release, deploy, or link WhatsApp without explicit user approval.
 
 ## Handoff format
 

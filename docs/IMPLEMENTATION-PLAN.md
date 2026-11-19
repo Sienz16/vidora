@@ -1,6 +1,6 @@
 # Implementation plan
 
-Complete one phase at a time and stop for audit. Do not commit, push, deploy, link WhatsApp, or install host-level prerequisites without explicit user approval.
+Keep a separate commit for each completed implementation phase so its code and test evidence can be reviewed. Live linking and deployment still require approval. Do not commit, push, deploy, link WhatsApp, or install host-level prerequisites without explicit user approval.
 
 ## Phase 1 — Rust media-processing core
 
@@ -15,7 +15,7 @@ Build the smallest testable Rust library and CLI/worker entry point that:
 
 Tests must include generated SDR fixtures, corrupt input, rotation, landscape/portrait, silent video, long input, excessive duration, invalid streams, timeout, and cleanup.
 
-**Stop for audit:** provide files changed, exact test output, sample redacted metadata, and known encoding limitations. Do not integrate WhatsApp yet.
+**Review evidence:** provide files changed, exact test output, sample redacted metadata, and known encoding limitations.
 
 ## Phase 2 — Rust internal API and durable jobs
 
@@ -27,7 +27,7 @@ Add:
 - Bounded request/download bodies and authenticated artifact streaming.
 - API integration tests for authorization, malformed input, duplicate jobs, path traversal, delivery retries, and cleanup.
 
-**Stop for audit:** the auditor must inspect actual route authorization, stream bounds, path resolution, restart behavior, and test evidence.
+**Review evidence:** inspect route authorization, stream bounds, path resolution, restart behavior, and test results.
 
 ## Phase 3 — Node.js WhatsApp sidecar
 
@@ -40,7 +40,7 @@ Add:
 - `/help` and `/status` responses without personal data in logs.
 - A mock Rust service and mocked protocol boundary for automated tests. No live WhatsApp linking in this phase.
 
-**Stop for audit:** prove unauthorized and duplicate-message behavior with tests. Do not use a real WhatsApp account without separate approval.
+**Review evidence:** prove unauthorized and duplicate-message behavior with tests. Do not use a real WhatsApp account without separate approval.
 
 ## Phase 4 — Containers and security hardening
 
@@ -52,7 +52,7 @@ Add:
 - Environment validation, secret exclusion, health checks, graceful shutdown, and retention sweeps.
 - Security tests and dependency/container audit reports.
 
-**Stop for audit:** run the complete automated suite and inspect the effective Compose configuration. Fix all high-severity findings or document an accepted, justified exception with the user.
+**Review evidence:** run the complete automated suite and inspect the effective Compose configuration. Fix all high-severity findings or document an accepted, justified exception with the user.
 
 ## Phase 5 — Controlled secondary-account trial
 
@@ -86,4 +86,4 @@ The implementing agent must return:
 5. Deviations, unresolved issues, and security implications.
 6. A statement of what was not tested.
 
-A phase is not complete based on a summary alone. The auditor inspects the actual files and verifies evidence before approving the next phase.
+A completed phase requires verified tests and recorded evidence. Deployment requires security review and the live trial results.
