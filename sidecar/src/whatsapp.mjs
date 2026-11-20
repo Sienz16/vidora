@@ -3,7 +3,7 @@ import {
   Browsers, DisconnectReason, generateMessageIDV2, jidNormalizedUser,
   makeWASocket, prepareWAMessageMedia,
 } from '@whiskeysockets/baileys'
-import { downloadDocument } from './media.mjs'
+import { downloadMedia } from './media.mjs'
 
 const silent = {
   level: 'silent',
@@ -56,19 +56,33 @@ export async function connect({ auth, botJid, bot, stop, pairing, log, online })
   const wa = {
     signal,
     lookupLid: (jid) => socket.signalRepository.lidMapping.getPNForLID(jid),
-    download: (message, bytes) => downloadDocument(message, bytes, signal,
-      (original) => socket.updateMediaMessage(original)),
+    download: (message, bytes, mediaType = 'document') => downloadMedia(
+      message, bytes, mediaType, signal, (original) => socket.updateMediaMessage(original),
+    ),
     reply: (jid, text) => bounded(() => socket.sendMessage(jid, { text }), signal, 15_000, end),
-    prepare: (stream, index, total) => bounded(() => prepareWAMessageMedia({
-      document: { stream },
-      mimetype: 'video/mp4',
-      fileName: `part-${String(index + 1).padStart(2, '0')}.mp4`,
-      caption: `Part ${index + 1}/${total}`,
-    }, {
-      logger: silent,
-      upload: socket.waUploadToServer,
-      mediaUploadTimeoutMs: 12_000,
-    }), signal, 60_000),
+    prepare: (stream, index, total, options = {}) => bounded(() => {
+      const media = options.kind === 'photo'
+        ? {
+          image: { stream },
+          mimetype: 'image/jpeg',
+          caption: total > 1 ? `HD Photo ${index + 1}/${total} — forward to Status` : 'HD Photo — forward to Status',
+          ...(Number.isInteger(options.meta?.width) ? { width: options.meta.width } : {}),
+          ...(Number.isInteger(options.meta?.height) ? { height: options.meta.height } : {}),
+          ...(typeof options.meta?.thumbnail === 'string' && options.meta.thumbnail.length > 0
+            ? { jpegThumbnail: options.meta.thumbnail } : {}),
+        }
+        : {
+          document: { stream },
+          mimetype: 'video/mp4',
+          fileName: `part-${String(index + 1).padStart(2, '0')}.mp4`,
+          caption: `Part ${index + 1}/${total}`,
+        }
+      return prepareWAMessageMedia(media, {
+        logger: silent,
+        upload: socket.waUploadToServer,
+        mediaUploadTimeoutMs: 12_000,
+      })
+    }, signal, 60_000),
     async send(jid, content) {
       await bounded(async () => {
         const messageId = generateMessageIDV2(socket.user?.id)

@@ -48,31 +48,37 @@ export async function* decryptDocument(body, { cipherKey, iv, macKey }, bytes) {
   if (final.length) yield final
 }
 
-export async function downloadDocument(message, bytes, signal, reupload) {
+export async function downloadMedia(message, bytes, mediaType, signal, reupload) {
+  if (mediaType !== 'document' && mediaType !== 'image') {
+    throw new Error('unsupported media type')
+  }
   const downloadSignal = AbortSignal.any([signal, AbortSignal.timeout(80_000)])
-  let document = message.message.documentMessage
+  const extract = (msg) => (mediaType === 'image' ? msg.message?.imageMessage : msg.message?.documentMessage)
+  let media = extract(message)
+  if (!media) throw new Error('missing media message')
   const get = (data) => fetch(mediaUrl(data), {
     headers: { origin: 'https://web.whatsapp.com' },
     redirect: 'error',
     signal: downloadSignal,
   })
-  let response = await get(document)
+  let response = await get(media)
   if ([404, 410].includes(response.status)) {
     await response.body?.cancel()
     downloadSignal.throwIfAborted()
     const refreshed = await reupload(message)
-    document = refreshed.message.documentMessage
-    response = await get(document)
+    media = extract(refreshed)
+    if (!media) throw new Error('missing media message')
+    response = await get(media)
   }
   if (!response.ok || !response.body) {
     await response.body?.cancel()
     throw new Error('media download failed')
   }
   try {
-    if (!(document.mediaKey instanceof Uint8Array) || document.mediaKey.length !== 32) {
+    if (!(media.mediaKey instanceof Uint8Array) || media.mediaKey.length !== 32) {
       throw new Error('invalid media key')
     }
-    const keys = await getMediaKeys(document.mediaKey, 'document')
+    const keys = await getMediaKeys(media.mediaKey, mediaType)
     return Readable.from(decryptDocument(Readable.fromWeb(response.body), keys, bytes), {
       objectMode: false,
       signal: downloadSignal,
@@ -82,3 +88,6 @@ export async function downloadDocument(message, bytes, signal, reupload) {
     throw error
   }
 }
+
+export const downloadDocument = (message, bytes, signal, reupload) =>
+  downloadMedia(message, bytes, 'document', signal, reupload)

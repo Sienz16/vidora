@@ -1,14 +1,20 @@
 import assert from 'node:assert/strict'
 import { Readable } from 'node:stream'
 import test from 'node:test'
-import { ApiError } from '../src/api.mjs'
+import { ApiError, MAX_INPUT, MAX_PHOTO_INPUT } from '../src/api.mjs'
 import { createBot, phoneJid } from '../src/bot.mjs'
 
 const owner = phoneJid('12025550101')
 const stranger = phoneJid('12025550102')
-const photo = { mimetype: 'image/jpeg', fileLength: 3 }
+const unsupported = { mimetype: 'application/pdf', fileLength: 3, fileSha256: Buffer.alloc(32) }
 const document = {
   mimetype: 'video/mp4', fileLength: 3, fileName: 'sample.mp4', fileSha256: Buffer.alloc(32),
+}
+const imageDoc = {
+  mimetype: 'image/png', fileLength: 3, fileName: 'pic.png', fileSha256: Buffer.alloc(32),
+}
+const imageMsg = {
+  mimetype: 'image/jpeg', fileLength: 3, fileSha256: Buffer.alloc(32),
 }
 const message = (id, jid, content = { documentMessage: document }, key = {}) => ({
   key: { id, remoteJid: jid, fromMe: false, ...key }, message: content,
@@ -19,17 +25,30 @@ function fixtures() {
   const sent = []
   const notices = []
   const jobs = new Map()
-  const counters = { downloads: 0, uploads: 0, prepares: 0 }
+  const counters = { downloads: 0, uploads: 0, prepares: 0, downloadTypes: [], artifactTypes: [] }
   let current
   const api = {
     status: async (_signal, id) => id ? jobs.get(id) : current,
     async upload(_source, metadata) {
       counters.uploads++
-      current = { id: metadata.id, state: 'processing', next_index: 0, pending: false, sizes: [3, 3] }
+      current = {
+        id: metadata.id,
+        kind: metadata.kind,
+        state: 'processing',
+        next_index: 0,
+        pending: false,
+        sizes: metadata.kind === 'photo' ? [3] : [3, 3],
+        artifacts: metadata.kind === 'photo'
+          ? [{ mime: 'image/jpeg', width: 1080, height: 1920, thumbnail: '/9j/thumb' }]
+          : [{ mime: 'video/mp4' }, { mime: 'video/mp4' }],
+      }
       jobs.set(metadata.id, current)
       return { created: true, job: current }
     },
-    artifact: async (_id, index) => Readable.from([Buffer.from(String(index))]),
+    async artifact(_id, index, _expected, _signal, contentType) {
+      counters.artifactTypes.push(contentType)
+      return Readable.from([Buffer.from(String(index))])
+    },
     async delivery(id, index, action) {
       assert.equal(current.id, id)
       assert.equal(current.next_index, index)
@@ -55,14 +74,15 @@ function fixtures() {
   const transport = (signal = new AbortController().signal) => ({
     signal,
     lookupLid: async (jid) => jid === '222@lid' ? owner : undefined,
-    async download() {
+    async download(_message, _bytes, mediaType) {
       counters.downloads++
+      counters.downloadTypes.push(mediaType)
       return Readable.from([Buffer.from('mp4')])
     },
-    async prepare(stream, index, total) {
+    async prepare(stream, index, total, options) {
       counters.prepares++
       for await (const bytes of stream) assert.equal(String(bytes), String(index))
-      return { index, total }
+      return { index, total, options }
     },
     async send(jid, item) {
       assert.equal(jid, owner)
@@ -92,8 +112,8 @@ test('only authenticated owner direct messages and supported documents start job
     message('conflict', '222@lid', undefined, { remoteJidAlt: stranger }),
     message('unknown', '333@lid'),
     message('forwarded', owner, { extendedTextMessage: { text: '/help', contextInfo: { isForwarded: true } } }),
-    message('not-video', owner, { documentMessage: photo }),
-    message('large', owner, { documentMessage: { ...document, fileLength: 314572801 } }),
+    message('not-media', owner, { documentMessage: unsupported }),
+    message('large', owner, { documentMessage: { ...document, fileLength: MAX_INPUT + 1 } }),
     message('bad-hash', owner, { documentMessage: { ...document, fileSha256: Buffer.alloc(8) } }),
   ), wa)
   await worker.onUpsert({ type: 'append', messages: [message('historical', owner)] }, wa)
@@ -106,7 +126,7 @@ test('only authenticated owner direct messages and supported documents start job
     message('good', '222@lid'),
   ), wa)
   assert.match(notices[3], /Send a video/)
-  assert.match(notices[4], /No video job/)
+  assert.match(notices[4], /No media job/)
   assert.match(notices[5], /Video received/)
   assert.equal(counters.uploads, 1)
 })
@@ -120,6 +140,9 @@ test('status describes a processing failure', async () => {
   job().error = 'processing_failed'
   await worker.onUpsert(incoming(message('status', owner, { conversation: '/status' })), wa)
   assert.match(notices.at(-1), /couldn’t process that video/)
+  job().error = 'unsupported_hdr'
+  await worker.onUpsert(incoming(message('hdr-status', owner, { conversation: '/status' })), wa)
+  assert.match(notices.at(-1), /couldn’t convert this HDR format/)
 })
 
 test('deduplicates message replay across sidecar instances and reports busy', async () => {
@@ -162,7 +185,7 @@ test('retries safe preparation and ACK failures without sending a clip twice', a
   }
   await worker.tick(wa)
   await worker.tick(transport())
-  assert.deepEqual(sent, [{ index: 0, total: 2 }, { index: 1, total: 2 }])
+  assert.deepEqual(sent.map(({ index, total }) => ({ index, total })), [{ index: 0, total: 2 }, { index: 1, total: 2 }])
   assert.equal(counters.prepares, 2)
   assert.equal(job().state, 'delivered')
 })
@@ -205,6 +228,54 @@ test('a failure after relay starts never replays the same part', async () => {
   }
   await worker.tick(wa)
   await worker.tick(transport())
-  assert.deepEqual(sent, [{ index: 0, total: 2 }])
+  assert.deepEqual(sent.map(({ index, total }) => ({ index, total })), [{ index: 0, total: 2 }])
   assert.equal(job().error, 'delivery_uncertain')
+})
+
+test('accepts photo documents and direct HD images up to 50 MiB and delivers image/jpeg', async () => {
+  const { bot, transport, job, sent, counters, notices } = fixtures()
+  const wa = transport()
+  const worker = bot()
+  await worker.onUpsert(incoming(
+    message('too-big-photo-doc', owner, { documentMessage: { ...imageDoc, fileLength: MAX_PHOTO_INPUT + 1 } }),
+    message('too-big-image-msg', owner, { imageMessage: { ...imageMsg, fileLength: MAX_PHOTO_INPUT + 1 } }),
+  ), wa)
+  assert.equal(counters.uploads, 0)
+  assert.equal(notices.length, 2)
+
+  await worker.onUpsert(incoming(
+    message('photo-doc', owner, { documentMessage: imageDoc }),
+  ), wa)
+  assert.equal(counters.uploads, 1)
+  assert.deepEqual(counters.downloadTypes, ['document'])
+  assert.match(notices.at(-1), /Photo received/)
+  job().state = 'ready'
+  await worker.tick(wa)
+  assert.deepEqual(counters.artifactTypes, ['image/jpeg'])
+  assert.equal(sent.length, 1)
+  assert.deepEqual(sent[0].options, {
+    kind: 'photo',
+    meta: { mime: 'image/jpeg', width: 1080, height: 1920, thumbnail: '/9j/thumb' },
+  })
+  assert.equal(job().state, 'delivered')
+
+  await worker.onUpsert(incoming(
+    message('photo-heic-octet', owner, {
+      documentMessage: { mimetype: 'application/octet-stream', fileName: 'shot.HEIC', fileLength: 3, fileSha256: Buffer.alloc(32) },
+    }),
+  ), wa)
+  assert.equal(counters.uploads, 2)
+  job().state = 'failed'
+  job().error = 'input_size'
+  await worker.onUpsert(incoming(message('photo-err', owner, { conversation: '/status' })), wa)
+  assert.match(notices.at(-1), /50 MiB limit/)
+  job().error = 'processing_failed'
+  await worker.onUpsert(incoming(message('photo-proc-err', owner, { conversation: '/status' })), wa)
+  assert.match(notices.at(-1), /couldn’t process that photo/)
+
+  await worker.onUpsert(incoming(
+    message('photo-hd-msg', owner, { imageMessage: imageMsg }),
+  ), wa)
+  assert.equal(counters.uploads, 3)
+  assert.deepEqual(counters.downloadTypes, ['document', 'document', 'image'])
 })

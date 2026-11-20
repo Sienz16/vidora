@@ -10,7 +10,7 @@ import test from 'node:test'
 import { encryptedStream, getMediaKeys } from '@whiskeysockets/baileys'
 import { createApi, MAX_INPUT } from '../src/api.mjs'
 import { openAuth } from '../src/auth.mjs'
-import { decryptDocument, mediaUrl } from '../src/media.mjs'
+import { decryptDocument, downloadMedia, mediaUrl } from '../src/media.mjs'
 
 test('session SQLite persists Signal keys and refuses a second writer', async (t) => {
   const directory = await mkdtemp(join(tmpdir(), 'vidora-auth-'))
@@ -36,21 +36,42 @@ test('session SQLite persists Signal keys and refuses a second writer', async (t
   }
 })
 
-test('media download limits and authenticates Baileys-produced document bytes', async () => {
-  const clear = Buffer.from('media payload with a known document HMAC')
-  const encrypted = await encryptedStream({ stream: Readable.from([clear]) }, 'document')
-  try {
-    const keys = await getMediaKeys(encrypted.mediaKey, 'document')
-    const bytes = await readFile(encrypted.encFilePath)
-    const pieces = [...bytes].map((byte) => Buffer.from([byte]))
-    assert.deepEqual(await buffer(Readable.from(decryptDocument(pieces, keys, clear.length))), clear)
-    const incorrect = Buffer.from(bytes)
-    incorrect[incorrect.length - 1] ^= 1
-    await assert.rejects(buffer(Readable.from(decryptDocument([incorrect], keys, clear.length))), /authentication/)
-    await assert.rejects(buffer(Readable.from(decryptDocument([bytes.subarray(0, -1)], keys, clear.length))), /authentication/)
-    await assert.rejects(buffer(Readable.from(decryptDocument([Buffer.concat([bytes, bytes])], keys, clear.length))), /length/)
-  } finally {
-    await rm(encrypted.encFilePath, { force: true })
+test('media download limits and authenticates Baileys-produced document and image bytes', async (t) => {
+  for (const mediaType of ['document', 'image']) {
+    const clear = Buffer.from(`media payload with a known ${mediaType} HMAC`)
+    const encrypted = await encryptedStream({ stream: Readable.from([clear]) }, mediaType)
+    try {
+      const keys = await getMediaKeys(encrypted.mediaKey, mediaType)
+      const bytes = await readFile(encrypted.encFilePath)
+      const pieces = [...bytes].map((byte) => Buffer.from([byte]))
+      assert.deepEqual(await buffer(Readable.from(decryptDocument(pieces, keys, clear.length))), clear)
+      const incorrect = Buffer.from(bytes)
+      incorrect[incorrect.length - 1] ^= 1
+      await assert.rejects(buffer(Readable.from(decryptDocument([incorrect], keys, clear.length))), /authentication/)
+      await assert.rejects(buffer(Readable.from(decryptDocument([bytes.subarray(0, -1)], keys, clear.length))), /authentication/)
+      await assert.rejects(buffer(Readable.from(decryptDocument([Buffer.concat([bytes, bytes])], keys, clear.length))), /length/)
+
+      const server = createServer((_req, res) => {
+        res.writeHead(200)
+        res.end(bytes)
+      })
+      server.listen(0, '127.0.0.1')
+      await once(server, 'listening')
+      t.after(() => { server.closeAllConnections(); server.close() })
+      const localUrl = `http://127.0.0.1:${server.address().port}/v/test`
+      await assert.rejects(
+        downloadMedia(
+          { message: { [`${mediaType}Message`]: { url: localUrl, mediaKey: encrypted.mediaKey } } },
+          clear.length,
+          mediaType,
+          new AbortController().signal,
+          async () => { throw new Error('no reupload') },
+        ),
+        /invalid media origin/,
+      )
+    } finally {
+      await rm(encrypted.encFilePath, { force: true })
+    }
   }
   assert.equal(mediaUrl({ directPath: '/v/test?data=x' }).hostname, 'mmg.whatsapp.net')
   assert.throws(() => mediaUrl({ url: 'https://mmg.whatsapp.net.local/v/test' }))
@@ -73,6 +94,9 @@ test('HTTP client streams bounded uploads and downloads against a mock Rust API'
       }
       response.writeHead(202, { 'content-type': 'application/json' })
       response.end('{"state":"processing"}')
+    } else if (request.url === '/internal/v1/jobs/photo-job/artifacts/0') {
+      response.writeHead(200, { 'content-type': 'image/jpeg', 'content-length': '3' })
+      response.end('jpg')
     } else if (request.url.endsWith('/0')) {
       response.writeHead(200, { 'content-type': 'video/mp4', 'content-length': '3' })
       response.end('mp4')
@@ -94,6 +118,9 @@ test('HTTP client streams bounded uploads and downloads against a mock Rust API'
   await assert.rejects(api.upload(Readable.from([Buffer.from('m')]), data, signal))
   await assert.rejects(api.upload(Readable.from([]), { ...data, bytes: MAX_INPUT + 1 }, signal), /size/)
   assert.deepEqual(await buffer(await api.artifact('job', 0, 3, signal)), Buffer.from('mp4'))
+  assert.deepEqual(await buffer(await api.artifact('photo-job', 0, 3, signal, 'image/jpeg')), Buffer.from('jpg'))
+  await assert.rejects(api.artifact('job', 0, 3, signal, 'image/jpeg'))
+  await assert.rejects(api.artifact('job', 0, 4_900_001, signal, 'image/jpeg'), /artifact size/)
   await assert.rejects(api.artifact('job', 1, 3, signal))
 
   const interrupted = new AbortController()

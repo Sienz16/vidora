@@ -3,7 +3,9 @@ import { Transform, Readable } from 'node:stream'
 import { pipeline } from 'node:stream/promises'
 
 export const MAX_INPUT = 300 * 1024 * 1024
+export const MAX_PHOTO_INPUT = 50 * 1024 * 1024
 const MAX_CLIP = 15_800_000
+const MAX_PHOTO_OUTPUT = 4_900_000
 
 export class ApiError extends Error {
   constructor(status) {
@@ -31,7 +33,7 @@ async function readJson(body) {
   let size = 0
   for await (const chunk of body) {
     size += chunk.length
-    if (size > 16_384) throw new Error('api response too large')
+    if (size > 32_768) throw new Error('api response too large')
     chunks.push(Buffer.from(chunk))
   }
   return JSON.parse(Buffer.concat(chunks, size))
@@ -102,14 +104,20 @@ export function createApi(baseUrl, token) {
         await finished
       }
     },
-    async artifact(job, index, expected, signal) {
-      if (!Number.isSafeInteger(expected) || expected < 1 || expected > MAX_CLIP) throw new Error('artifact size')
+    async artifact(job, index, expected, signal, contentType = 'video/mp4') {
+      if (contentType !== 'video/mp4' && contentType !== 'image/jpeg') {
+        throw new Error('unsupported artifact content type')
+      }
+      const maxOutput = contentType === 'image/jpeg' ? MAX_PHOTO_OUTPUT : MAX_CLIP
+      if (!Number.isSafeInteger(expected) || expected < 1 || expected > maxOutput) {
+        throw new Error('artifact size')
+      }
       const downloadSignal = timeout(signal, 40_000)
       const response = await fetch(url(`/${job}/artifacts/${index}`), {
         headers, redirect: 'error', signal: downloadSignal,
       })
       if (!response.ok || response.headers.get('content-length') !== String(expected)
-        || response.headers.get('content-type') !== 'video/mp4') {
+        || response.headers.get('content-type') !== contentType) {
         await response.body?.cancel()
         throw new ApiError(response.status)
       }
