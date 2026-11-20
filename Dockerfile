@@ -9,12 +9,15 @@ WORKDIR /ffmpeg
 RUN tar -xJf /tmp/ffmpeg.tar.xz --strip-components=1 && \
     ./configure --prefix=/opt/ffmpeg --disable-autodetect --disable-doc --disable-debug \
       --disable-ffplay --disable-network --disable-protocols --enable-protocol=file,pipe \
-      --disable-devices --enable-indev=lavfi --enable-gpl --enable-libx264 && \
+      --disable-devices --enable-indev=lavfi --enable-gpl --enable-libx264 --enable-zlib && \
     make -j"$(nproc)" install-progs
-RUN library="$(dpkg-query -L libx264-164 | grep '/libx264\.so\.164$')" && \
-    test -f "$library" && install -D "$library" "/runtime$library" && \
-    mkdir -p /runtime/var/lib/dpkg/status.d && \
-    dpkg-query -s libx264-164 > /runtime/var/lib/dpkg/status.d/libx264-164
+RUN mkdir -p /runtime/var/lib/dpkg/status.d && \
+    for spec in "libx264-164:/libx264\.so\.164$" "zlib1g:/libz\.so\.1$"; do \
+      pkg="${spec%%:*}"; pattern="${spec#*:}"; \
+      library="$(dpkg-query -L "$pkg" | grep -E "$pattern" | head -n 1)" && \
+      test -f "$library" && install -D "$library" "/runtime$library" && \
+      dpkg-query -s "$pkg" > "/runtime/var/lib/dpkg/status.d/$pkg"; \
+    done
 
 FROM rust-base AS api-build
 WORKDIR /build
