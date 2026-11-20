@@ -10,7 +10,10 @@ use std::{
     time::{Duration, Instant},
 };
 
-use media::{CLIP_CAP, MAX_CLIPS, Video};
+use media::{
+    CLIP_CAP, ClassifiedInput, MAX_CLIPS, PHOTO_CAP, PHOTO_MIN_LONG_EDGE, PHOTO_QUALITIES,
+    PHOTO_TARGET_LONG_EDGE, Video,
+};
 use serde::Serialize;
 use tempfile::TempDir;
 use tokio::{
@@ -20,6 +23,14 @@ use tokio::{
 };
 
 pub const MAX_INPUT: u64 = 300 * 1024 * 1024;
+pub const MAX_PHOTO_INPUT: u64 = 50 * 1024 * 1024;
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum MediaKind {
+    Video,
+    Photo,
+}
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "snake_case")]
@@ -93,15 +104,36 @@ impl Tools {
 }
 
 #[derive(Debug, Serialize)]
-struct Input {
+pub(crate) struct VideoInput {
     bytes: u64,
     duration: f64,
     video_duration: Option<f64>,
     container: String,
     video_codec: String,
     audio_codec: Option<String>,
+    hdr_transfer: Option<&'static str>,
     enlarged: bool,
     video: Video,
+}
+
+#[derive(Debug, Serialize)]
+pub(crate) struct PhotoInput {
+    bytes: u64,
+    container: String,
+    codec: String,
+    width: u32,
+    height: u32,
+    rotation: i32,
+    #[serde(skip)]
+    pix_fmt: Option<String>,
+    hdr_transfer: Option<&'static str>,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(untagged)]
+enum Input {
+    Video(VideoInput),
+    Photo(PhotoInput),
 }
 
 #[derive(Debug, Serialize)]
@@ -115,13 +147,28 @@ pub struct Clip {
 }
 
 #[derive(Debug, Serialize)]
+pub struct Photo {
+    pub name: String,
+    pub bytes: u64,
+    pub width: u32,
+    pub height: u32,
+    pix_fmt: String,
+    quality: u32,
+    downscaled: bool,
+}
+
+#[derive(Debug, Serialize)]
 pub struct Record {
     pub job_id: Option<String>,
-    pub profile: &'static str,
+    pub kind: Option<MediaKind>,
+    pub profile: Option<&'static str>,
     pub ffmpeg_version: Option<String>,
     input: Option<Input>,
     pub encode_attempts: Vec<Vec<String>>,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
     pub clips: Vec<Clip>,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub photos: Vec<Photo>,
     pub elapsed_ms: u128,
     pub error: Option<Error>,
 }
@@ -130,6 +177,7 @@ pub struct Record {
 pub struct Job {
     work: TempDir,
     record: Record,
+    photo_thumbnail: Option<String>,
 }
 
 impl Job {
@@ -137,7 +185,15 @@ impl Job {
         &self.record
     }
 
-    /// Copy validated clips into a new private directory below a trusted destination.
+    pub fn kind(&self) -> MediaKind {
+        self.record.kind.expect("completed job has media kind")
+    }
+
+    pub fn photo_thumbnail(&self) -> Option<&str> {
+        self.photo_thumbnail.as_deref()
+    }
+
+    /// Copy validated outputs into a new private directory below a trusted destination.
     /// Working media is removed before the export is published.
     pub async fn export(mut self, destination: &Path) -> Result<PathBuf, Box<Record>> {
         let result = async {
@@ -145,12 +201,14 @@ impl Job {
                 .prefix("vidora-")
                 .permissions(Permissions::from_mode(0o700))
                 .tempdir_in(destination)?;
-            for clip in &self.record.clips {
-                fs::copy(
-                    self.work.path().join(&clip.name),
-                    export.path().join(&clip.name),
-                )
-                .await?;
+            for name in self
+                .record
+                .clips
+                .iter()
+                .map(|clip| clip.name.as_str())
+                .chain(self.record.photos.iter().map(|photo| photo.name.as_str()))
+            {
+                fs::copy(self.work.path().join(name), export.path().join(name)).await?;
             }
             self.work.close()?;
             Ok::<_, io::Error>(export.keep())
@@ -192,6 +250,7 @@ pub struct Processor {
     tools: Tools,
     root: PathBuf,
     clip_cap: u64,
+    photo_cap: u64,
 }
 
 impl Processor {
@@ -201,6 +260,7 @@ impl Processor {
             tools,
             root: root.canonicalize()?,
             clip_cap: CLIP_CAP,
+            photo_cap: PHOTO_CAP,
         })
     }
 
@@ -212,11 +272,13 @@ impl Processor {
         let started = Instant::now();
         let mut record = Record {
             job_id: None,
-            profile: "hd29",
+            kind: None,
+            profile: None,
             ffmpeg_version: None,
             input: None,
             encode_attempts: Vec::new(),
             clips: Vec::new(),
+            photos: Vec::new(),
             elapsed_ms: 0,
             error: None,
         };
@@ -237,16 +299,22 @@ impl Processor {
             )
             .await
             .unwrap_or(Err(Error::Timeout));
-            if let Err(error) = result {
-                work.close()?;
-                return Err(error);
+            match result {
+                Ok(thumbnail) => Ok((work, thumbnail)),
+                Err(error) => {
+                    work.close()?;
+                    Err(error)
+                }
             }
-            Ok(work)
         }
         .await;
         record.elapsed_ms = started.elapsed().as_millis();
         match result {
-            Ok(work) => Ok(Job { work, record }),
+            Ok((work, photo_thumbnail)) => Ok(Job {
+                work,
+                record,
+                photo_thumbnail,
+            }),
             Err(error) => {
                 record.error = Some(error);
                 Err(Box::new(record))
@@ -260,7 +328,7 @@ impl Processor {
         reader: impl AsyncRead + Unpin,
         declared_size: Option<u64>,
         record: &mut Record,
-    ) -> Result<(), Error> {
+    ) -> Result<Option<String>, Error> {
         let bytes = timeout(
             Duration::from_secs(90),
             receive(reader, declared_size, directory, MAX_INPUT),
@@ -283,10 +351,31 @@ impl Processor {
                 .ok_or(Error::ToolUnavailable)?
                 .to_owned(),
         );
-        let input = media::probe(&self.tools, directory, "source")
+        match media::probe(&self.tools, directory, "source")
             .await?
-            .input(bytes)?;
-        let input = record.input.insert(input);
+            .classify(bytes)?
+        {
+            ClassifiedInput::Video(video) => {
+                record.kind = Some(MediaKind::Video);
+                record.profile = Some("hd29");
+                record.input = Some(Input::Video(video));
+                self.process_video(directory, record).await?;
+                Ok(None)
+            }
+            ClassifiedInput::Photo(photo) => {
+                record.kind = Some(MediaKind::Photo);
+                record.profile = Some("photo_hd");
+                record.input = Some(Input::Photo(photo));
+                let thumbnail = self.process_photo(directory, record).await?;
+                Ok(Some(thumbnail))
+            }
+        }
+    }
+
+    async fn process_video(&self, directory: &Path, record: &mut Record) -> Result<(), Error> {
+        let Some(Input::Video(input)) = record.input.as_ref() else {
+            return Err(Error::InvalidMedia);
+        };
         let expected_duration = input.video_duration.unwrap_or(input.duration);
         media::decode(
             &self.tools,
@@ -308,7 +397,7 @@ impl Processor {
             )
             .await?;
             match self
-                .inspect_clips(directory, input.audio_codec.is_some(), expected_duration)
+                .inspect_clips(directory, input, expected_duration)
                 .await
             {
                 Ok(clips) => {
@@ -327,10 +416,70 @@ impl Processor {
         Err(Error::ClipSize)
     }
 
+    async fn process_photo(&self, directory: &Path, record: &mut Record) -> Result<String, Error> {
+        let Some(Input::Photo(input)) = record.input.as_ref() else {
+            return Err(Error::InvalidMedia);
+        };
+        media::decode_photo(&self.tools, directory, "source", false).await?;
+        let (src_w, src_h) = if input.rotation.rem_euclid(180) == 90 {
+            (input.height, input.width)
+        } else {
+            (input.width, input.height)
+        };
+        let mut max_edge = PHOTO_TARGET_LONG_EDGE;
+        for _ in 0..6 {
+            if max_edge < PHOTO_MIN_LONG_EDGE {
+                break;
+            }
+            for &quality in &PHOTO_QUALITIES {
+                let args = media::photo_encode_args(input, max_edge, quality);
+                record.encode_attempts.push(args);
+                tool::run(
+                    &self.tools.ffmpeg,
+                    directory,
+                    record.encode_attempts.last().unwrap(),
+                    Duration::from_secs(60),
+                    Error::Encode,
+                )
+                .await?;
+                let name = "photo-000.jpg";
+                let output_path = directory.join(name);
+                let out_bytes = fs::metadata(&output_path).await?.len();
+                if out_bytes == 0 {
+                    return Err(Error::InvalidOutput);
+                }
+                if out_bytes > self.photo_cap {
+                    fs::remove_file(&output_path).await?;
+                    continue;
+                }
+                let (width, height, pix_fmt) = media::probe_jpeg(&self.tools, directory, name)
+                    .await?
+                    .validate_photo(max_edge, input.hdr_transfer.is_some())
+                    .map_err(|_| Error::InvalidOutput)?;
+                media::decode_photo(&self.tools, directory, name, true).await?;
+                let thumbnail = media::photo_thumbnail(&self.tools, directory, name).await?;
+                fs::remove_file(directory.join("source")).await?;
+                record.photos.push(Photo {
+                    name: name.into(),
+                    bytes: out_bytes,
+                    width,
+                    height,
+                    pix_fmt,
+                    quality,
+                    downscaled: width.max(height) < src_w.max(src_h)
+                        || width.min(height) < src_w.min(src_h),
+                });
+                return Ok(thumbnail);
+            }
+            max_edge = (max_edge * 85) / 100;
+        }
+        Err(Error::ClipSize)
+    }
+
     async fn inspect_clips(
         &self,
         directory: &Path,
-        expected_audio: bool,
+        input: &VideoInput,
         expected_duration: f64,
     ) -> Result<Vec<Clip>, Error> {
         let mut clips = Vec::new();
@@ -349,7 +498,7 @@ impl Processor {
             }
             let (duration, video_duration, video) = media::probe(&self.tools, directory, &name)
                 .await?
-                .validate_clip(expected_audio)
+                .validate_clip(input.audio_codec.is_some(), input.hdr_transfer.is_some())
                 .map_err(|_| Error::InvalidOutput)?;
             media::decode(&self.tools, directory, &name, duration, video.frames).await?;
             total += video_duration;
@@ -359,7 +508,7 @@ impl Processor {
                 duration,
                 video_duration,
                 video,
-                audio: expected_audio,
+                audio: input.audio_codec.is_some(),
             });
         }
         if (total - expected_duration).abs() > 0.5 {
@@ -596,6 +745,107 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn converts_pq_and_hlg_to_sdr_and_segments_long_hdr_video() {
+        let fixtures = tempfile::tempdir().unwrap();
+        let work = tempfile::tempdir().unwrap();
+        let mut processor = Processor::new(Tools::from_path().unwrap(), work.path()).unwrap();
+        for (transfer, duration, expected_parts) in
+            [("smpte2084", "1", 1), ("arib-std-b67", "30", 2)]
+        {
+            let tags = format!(
+                "format=yuv420p10le,setparams=range=limited:color_primaries=bt2020:color_trc={transfer}:colorspace=bt2020nc"
+            );
+            let source = fixture(
+                fixtures.path(),
+                &format!("{transfer}.mp4"),
+                &[
+                    "-f",
+                    "lavfi",
+                    "-i",
+                    "testsrc2=s=96x64:r=5",
+                    "-f",
+                    "lavfi",
+                    "-i",
+                    "sine=frequency=440:sample_rate=44100",
+                    "-t",
+                    duration,
+                    "-c:v",
+                    "libx264",
+                    "-vf",
+                    &tags,
+                    "-c:a",
+                    "aac",
+                ],
+            );
+            let job = from_file(&mut processor, &source)
+                .await
+                .unwrap_or_else(|record| panic!("{transfer}: {record:#?}"));
+            assert!(matches!(
+                job.record().input.as_ref().unwrap(),
+                Input::Video(video) if video.hdr_transfer == Some(transfer)
+            ));
+            assert_eq!(job.record().clips.len(), expected_parts);
+            assert!(
+                job.record()
+                    .clips
+                    .iter()
+                    .all(|clip| clip.duration <= 29.0 && clip.audio)
+            );
+            drop(job);
+            assert_empty(work.path());
+        }
+    }
+
+    #[tokio::test]
+    async fn ignores_only_supported_phone_camera_metadata_tracks() {
+        let fixtures = tempfile::tempdir().unwrap();
+        let work = tempfile::tempdir().unwrap();
+        let mut processor = Processor::new(Tools::from_path().unwrap(), work.path()).unwrap();
+        let root = fixtures.path();
+        std::fs::write(root.join("data"), b"fixture").unwrap();
+        let generic = fixture(
+            root,
+            "tagged.mov",
+            &[
+                "-f",
+                "lavfi",
+                "-i",
+                "testsrc2=s=32x32:r=25:d=1",
+                "-f",
+                "data",
+                "-i",
+                "data",
+                "-map",
+                "0:v",
+                "-map",
+                "1:0",
+                "-c:v",
+                "libx264",
+                "-c:d",
+                "copy",
+                "-tag:d",
+                "gpmd",
+            ],
+        );
+        let failure = from_file(&mut processor, &generic).await.unwrap_err();
+        assert_eq!(failure.error, Some(Error::InvalidMedia));
+
+        // FFmpeg can mux gpmd data, so relabel its track to model camera metadata.
+        let mut bytes = std::fs::read(generic).unwrap();
+        for start in 0..bytes.len() - 3 {
+            if &bytes[start..start + 4] == b"gpmd" {
+                bytes[start..start + 4].copy_from_slice(b"mebx");
+            }
+        }
+        let camera = root.join("camera.mov");
+        std::fs::write(&camera, bytes).unwrap();
+        let job = from_file(&mut processor, &camera).await.unwrap();
+        assert_eq!(job.record().clips.len(), 1);
+        drop(job);
+        assert_empty(work.path());
+    }
+
+    #[tokio::test]
     async fn rejects_invalid_sources_before_encode_and_cleans_work() {
         let fixtures = tempfile::tempdir().unwrap();
         let work = tempfile::tempdir().unwrap();
@@ -676,7 +926,7 @@ mod tests {
                 "-c:v",
                 "copy",
                 "-bsf:v",
-                "h264_metadata=colour_primaries=9:transfer_characteristics=18:matrix_coefficients=9",
+                "h264_metadata=colour_primaries=1:transfer_characteristics=18:matrix_coefficients=1",
             ],
         );
         for (file, errors) in [
@@ -752,5 +1002,312 @@ mod tests {
                 .is_err()
         );
         assert_empty(work.path());
+    }
+
+    fn inject_exif_orientation(jpeg: &[u8], orientation: u16) -> Vec<u8> {
+        let mut tiff = Vec::new();
+        tiff.extend_from_slice(b"II");
+        tiff.extend_from_slice(&42u16.to_le_bytes());
+        tiff.extend_from_slice(&8u32.to_le_bytes());
+        tiff.extend_from_slice(&1u16.to_le_bytes());
+        tiff.extend_from_slice(&0x0112u16.to_le_bytes());
+        tiff.extend_from_slice(&3u16.to_le_bytes());
+        tiff.extend_from_slice(&1u32.to_le_bytes());
+        tiff.extend_from_slice(&u32::from(orientation).to_le_bytes());
+        tiff.extend_from_slice(&0u32.to_le_bytes());
+        let mut app1 = Vec::from(b"Exif\0\0".as_slice());
+        app1.extend_from_slice(&tiff);
+        let len = u16::try_from(app1.len() + 2).unwrap();
+        let mut out = Vec::with_capacity(jpeg.len() + app1.len() + 4);
+        out.extend_from_slice(&jpeg[..2]);
+        out.extend_from_slice(&[0xff, 0xe1]);
+        out.extend_from_slice(&len.to_be_bytes());
+        out.extend_from_slice(&app1);
+        out.extend_from_slice(&jpeg[2..]);
+        out
+    }
+
+    fn lossless_webp_4x4() -> Vec<u8> {
+        vec![
+            0x52, 0x49, 0x46, 0x46, 0x1c, 0x00, 0x00, 0x00, 0x57, 0x45, 0x42, 0x50, 0x56, 0x50,
+            0x38, 0x4c, 0x0f, 0x00, 0x00, 0x00, 0x2f, 0x03, 0xc0, 0x00, 0x00, 0x07, 0x10, 0xfd,
+            0x8f, 0xfe, 0x07, 0x22, 0xa2, 0xff, 0x01, 0x00,
+        ]
+    }
+
+    #[tokio::test]
+    async fn converts_photo_matrix_and_cleans_work() {
+        let fixtures = tempfile::tempdir().unwrap();
+        let work = tempfile::tempdir().unwrap();
+        let output = tempfile::tempdir().unwrap();
+        let mut processor = Processor::new(Tools::from_path().unwrap(), work.path()).unwrap();
+        let root = fixtures.path();
+
+        let golden = fixture(
+            root,
+            "photo ; $(touch injected_photo).jpg",
+            &[
+                "-f",
+                "lavfi",
+                "-i",
+                "testsrc2=s=1080x1920:d=1",
+                "-frames:v",
+                "1",
+                "-c:v",
+                "mjpeg",
+            ],
+        );
+        let oversized = fixture(
+            root,
+            "oversized.png",
+            &[
+                "-f",
+                "lavfi",
+                "-i",
+                "color=c=blue:s=4200x2800:d=1",
+                "-frames:v",
+                "1",
+                "-c:v",
+                "png",
+            ],
+        );
+        let alpha = fixture(
+            root,
+            "alpha.png",
+            &[
+                "-f",
+                "lavfi",
+                "-i",
+                "color=c=red@0.5:s=300x200:d=1",
+                "-frames:v",
+                "1",
+                "-pix_fmt",
+                "rgba",
+                "-c:v",
+                "png",
+            ],
+        );
+        let base_rot = fixture(
+            root,
+            "base_rot.jpg",
+            &[
+                "-f",
+                "lavfi",
+                "-i",
+                "testsrc2=s=200x100:d=1",
+                "-frames:v",
+                "1",
+                "-c:v",
+                "mjpeg",
+            ],
+        );
+        let exif_rot = root.join("exif_rot.jpg");
+        std::fs::write(
+            &exif_rot,
+            inject_exif_orientation(&std::fs::read(base_rot).unwrap(), 6),
+        )
+        .unwrap();
+        let webp = root.join("still.webp");
+        std::fs::write(&webp, lossless_webp_4x4()).unwrap();
+
+        for (file, expected_dims, expected_downscaled) in [
+            (golden, (1080, 1920), false),
+            (oversized, (3840, 2560), true),
+            (alpha, (300, 200), false),
+            (exif_rot, (100, 200), false),
+            (webp, (4, 4), false),
+        ] {
+            let job = from_file(&mut processor, &file)
+                .await
+                .unwrap_or_else(|record| panic!("{}: {record:#?}", file.display()));
+            assert_eq!(job.kind(), MediaKind::Photo);
+            assert!(
+                job.photo_thumbnail()
+                    .is_some_and(|thumb| !thumb.is_empty() && thumb.starts_with("/9j/"))
+            );
+            let record = serde_json::to_value(job.record()).unwrap();
+            assert_eq!(record["kind"], "photo");
+            assert_eq!(record["profile"], "photo_hd");
+            assert!(record.get("clips").is_none());
+            assert!(!record.to_string().contains(job.photo_thumbnail().unwrap()));
+            assert_eq!(job.record().photos.len(), 1);
+            let photo = &job.record().photos[0];
+            assert_eq!(photo.name, "photo-000.jpg");
+            assert!(photo.bytes > 0 && photo.bytes <= PHOTO_CAP);
+            assert_eq!((photo.width, photo.height), expected_dims);
+            assert_eq!(photo.downscaled, expected_downscaled);
+            assert_eq!(photo.pix_fmt, "yuvj420p");
+
+            let saved = job.export(output.path()).await.unwrap();
+            assert_eq!(saved.read_dir().unwrap().count(), 1);
+            assert!(saved.join("photo-000.jpg").is_file());
+            assert_empty(work.path());
+            assert!(
+                !record
+                    .to_string()
+                    .contains(file.file_name().unwrap().to_str().unwrap())
+            );
+        }
+        assert!(!root.join("injected_photo").exists());
+    }
+
+    #[tokio::test]
+    async fn retries_photo_quality_and_scale_on_size_cap_and_cleans_work() {
+        let fixtures = tempfile::tempdir().unwrap();
+        let work = tempfile::tempdir().unwrap();
+        let mut processor = Processor::new(Tools::from_path().unwrap(), work.path()).unwrap();
+        let detailed = fixture(
+            fixtures.path(),
+            "detailed.png",
+            &[
+                "-f",
+                "lavfi",
+                "-i",
+                "testsrc2=s=1600x1200:d=1,noise=alls=20:allf=t+u",
+                "-frames:v",
+                "1",
+                "-c:v",
+                "png",
+            ],
+        );
+
+        let full = from_file(&mut processor, &detailed).await.unwrap();
+        let q2_bytes = full.record().photos[0].bytes;
+        assert_eq!(full.record().encode_attempts.len(), 1);
+        drop(full);
+
+        processor.photo_cap = q2_bytes / 2;
+        let stepped = from_file(&mut processor, &detailed).await.unwrap();
+        assert!(stepped.record().encode_attempts.len() > 1);
+        assert!(stepped.record().photos[0].bytes <= processor.photo_cap);
+        drop(stepped);
+        assert_empty(work.path());
+
+        processor.photo_cap = 1;
+        let small = fixture(
+            fixtures.path(),
+            "small.png",
+            &[
+                "-f",
+                "lavfi",
+                "-i",
+                "testsrc2=s=800x600:d=1",
+                "-frames:v",
+                "1",
+                "-c:v",
+                "png",
+            ],
+        );
+        let failed = from_file(&mut processor, &small).await.unwrap_err();
+        assert_eq!(failed.error, Some(Error::ClipSize));
+        assert!(failed.encode_attempts.len() > PHOTO_QUALITIES.len());
+        assert_empty(work.path());
+    }
+
+    #[tokio::test]
+    async fn rejects_invalid_photos_before_encode_and_cleans_work() {
+        let fixtures = tempfile::tempdir().unwrap();
+        let work = tempfile::tempdir().unwrap();
+        let mut processor = Processor::new(Tools::from_path().unwrap(), work.path()).unwrap();
+        let root = fixtures.path();
+
+        let corrupt = root.join("corrupt.jpg");
+        std::fs::write(&corrupt, b"\xff\xd8not-a-valid-jpeg").unwrap();
+
+        let tiny = fixture(
+            root,
+            "tiny.png",
+            &[
+                "-f",
+                "lavfi",
+                "-i",
+                "color=s=1x1:d=1",
+                "-frames:v",
+                "1",
+                "-c:v",
+                "png",
+            ],
+        );
+        let too_wide = fixture(
+            root,
+            "too_wide.png",
+            &[
+                "-f",
+                "lavfi",
+                "-i",
+                "color=s=12300x16:d=1",
+                "-frames:v",
+                "1",
+                "-c:v",
+                "png",
+            ],
+        );
+        let too_many_pixels = fixture(
+            root,
+            "too_many_pixels.png",
+            &[
+                "-f",
+                "lavfi",
+                "-i",
+                "color=s=7300x7300:d=1",
+                "-frames:v",
+                "1",
+                "-c:v",
+                "png",
+            ],
+        );
+        let multi_frame = fixture(
+            root,
+            "multi.tiff",
+            &[
+                "-f",
+                "lavfi",
+                "-i",
+                "testsrc2=s=32x32:r=2:d=1",
+                "-frames:v",
+                "2",
+                "-f",
+                "image2pipe",
+                "-c:v",
+                "tiff",
+            ],
+        );
+        let over_50mb = fixture(
+            root,
+            "over50mb.bmp",
+            &[
+                "-f",
+                "lavfi",
+                "-i",
+                "color=s=4500x4000:d=1",
+                "-frames:v",
+                "1",
+                "-c:v",
+                "bmp",
+            ],
+        );
+        assert!(over_50mb.metadata().unwrap().len() > MAX_PHOTO_INPUT);
+
+        for (file, errors) in [
+            (
+                corrupt,
+                &[Error::Probe, Error::InvalidMedia, Error::Decode][..],
+            ),
+            (tiny, &[Error::InvalidMedia]),
+            (too_wide, &[Error::InvalidMedia]),
+            (too_many_pixels, &[Error::InvalidMedia]),
+            (multi_frame, &[Error::InvalidMedia, Error::Decode]),
+            (over_50mb, &[Error::InputSize]),
+        ] {
+            let failure = from_file(&mut processor, &file)
+                .await
+                .expect_err(file.file_name().unwrap().to_str().unwrap());
+            assert!(
+                errors.contains(&failure.error.unwrap()),
+                "{file:?}: {failure:?}"
+            );
+            assert!(failure.encode_attempts.is_empty());
+            assert_empty(work.path());
+        }
     }
 }

@@ -17,7 +17,7 @@ async fn main() -> ExitCode {
             }
         }
         _ => {
-            eprintln!("Usage: vidora INPUT_VIDEO EXISTING_OUTPUT_DIRECTORY");
+            eprintln!("Usage: vidora INPUT_MEDIA EXISTING_OUTPUT_DIRECTORY");
             ExitCode::from(2)
         }
     }
