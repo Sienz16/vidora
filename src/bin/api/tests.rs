@@ -76,7 +76,14 @@ fn seed_ready(api: &Shared, id: &str) -> String {
     fs::write(directory.join("clip-001.mp4"), b"second").unwrap();
     assert!(
         store
-            .ready(&job, "vidora-generated", "[5,6]", "{}")
+            .ready(
+                &job,
+                "video",
+                "vidora-generated",
+                "[5,6]",
+                "[{\"mime\":\"video/mp4\"},{\"mime\":\"video/mp4\"}]",
+                "{}"
+            )
             .unwrap()
     );
     job
@@ -463,4 +470,128 @@ async fn streams_a_generated_clip_through_the_real_worker() {
     .await;
     assert_eq!(terminal.status(), StatusCode::NO_CONTENT);
     assert_eq!(fs::read_dir(&api.media).unwrap().count(), 0);
+}
+
+#[tokio::test]
+async fn streams_a_generated_photo_with_metadata_and_cleans_thumbnail() {
+    let fixture = tempfile::tempdir().unwrap();
+    let source = fixture.path().join("sample.png");
+    assert!(
+        Command::new("ffmpeg")
+            .args([
+                "-v",
+                "error",
+                "-f",
+                "lavfi",
+                "-i",
+                "testsrc2=size=640x480:d=1",
+                "-frames:v",
+                "1",
+                "-c:v",
+                "png",
+            ])
+            .arg(&source)
+            .status()
+            .unwrap()
+            .success()
+    );
+    let root = tempfile::tempdir().unwrap();
+    let api = Api::open(root.path(), TOKEN).unwrap();
+    let app = router(api.clone());
+    let data = fs::read(&source).unwrap();
+    let digest = hex_digest(&Sha256::digest(&data));
+    let file = tokio::fs::File::open(&source).await.unwrap();
+    let response = upload(
+        &app,
+        "photo-msg-1",
+        data.len() as u64,
+        &digest,
+        Body::from_stream(ReaderStream::new(file)),
+    )
+    .await;
+    assert_eq!(response.status(), StatusCode::ACCEPTED);
+    let response = read_json(response).await;
+    let id = response["id"].as_str().unwrap();
+    api.tasks.close();
+    tokio::time::timeout(Duration::from_secs(30), api.tasks.wait())
+        .await
+        .unwrap();
+    let job = api.get(id).unwrap();
+    assert_eq!(job.state, "ready", "{job:?}");
+    assert_eq!(job.kind, "photo");
+    assert_eq!(job.sizes.len(), 1);
+    assert_eq!(job.artifacts.len(), 1);
+    assert_eq!(job.artifacts[0].mime, "image/jpeg");
+    assert_eq!(job.artifacts[0].width, Some(640));
+    assert_eq!(job.artifacts[0].height, Some(480));
+    assert!(
+        job.artifacts[0]
+            .thumbnail
+            .as_deref()
+            .is_some_and(|thumb| !thumb.is_empty() && thumb.starts_with("/9j/"))
+    );
+
+    let artifact_res = request(
+        &app,
+        "GET",
+        &format!("/internal/v1/jobs/{id}/artifacts/0"),
+        true,
+        &[],
+        Body::empty(),
+    )
+    .await;
+    assert_eq!(artifact_res.status(), StatusCode::OK);
+    assert_eq!(
+        artifact_res
+            .headers()
+            .get(header::CONTENT_TYPE)
+            .and_then(|v| v.to_str().ok()),
+        Some("image/jpeg")
+    );
+    let jpeg_bytes = to_bytes(artifact_res.into_body(), 5_000_000).await.unwrap();
+    assert_eq!(jpeg_bytes.len() as u64, job.sizes[0]);
+    assert!(jpeg_bytes.starts_with(&[0xff, 0xd8]));
+
+    assert_eq!(
+        delivery_action(&app, id, 0, "begin").await.status(),
+        StatusCode::OK
+    );
+    let acked = read_json(delivery_action(&app, id, 0, "ack").await).await;
+    assert_eq!(acked["state"], "delivered");
+    assert_eq!(acked["artifacts"], json!([]));
+    assert_eq!(fs::read_dir(&api.work).unwrap().count(), 0);
+    assert_eq!(fs::read_dir(&api.media).unwrap().count(), 0);
+}
+
+#[tokio::test]
+async fn migrates_existing_jobs_table_without_kind_or_artifact_meta() {
+    let root = tempfile::tempdir().unwrap();
+    let db_path = root.path().join("jobs.db");
+    {
+        let conn = rusqlite::Connection::open(&db_path).unwrap();
+        conn.execute_batch(
+            "CREATE TABLE jobs (
+                id TEXT PRIMARY KEY,
+                message_hash TEXT NOT NULL UNIQUE,
+                state TEXT NOT NULL,
+                next_index INTEGER NOT NULL DEFAULT 0,
+                pending INTEGER NOT NULL DEFAULT 0,
+                sizes TEXT NOT NULL DEFAULT '[]',
+                error TEXT,
+                directory TEXT,
+                record TEXT,
+                expires INTEGER
+            );
+            INSERT INTO jobs (id, message_hash, state) VALUES (
+                '00000000-0000-4000-8000-000000000001',
+                '0000000000000000000000000000000000000000000000000000000000000000',
+                'delivered'
+            );",
+        )
+        .unwrap();
+    }
+    let api = Api::open(root.path(), TOKEN).unwrap();
+    let migrated = api.get("00000000-0000-4000-8000-000000000001").unwrap();
+    assert_eq!(migrated.kind, "video");
+    assert!(migrated.artifacts.is_empty());
 }

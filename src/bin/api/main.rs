@@ -25,12 +25,12 @@ use futures_util::{StreamExt, stream};
 use serde::Deserialize;
 use serde_json::json;
 use sha2::{Digest, Sha256};
-use store::{DeliveryAction, Job, Reservation, Store, remove_media};
+use store::{ArtifactMeta, DeliveryAction, Job, Reservation, Store, remove_media};
 use subtle::ConstantTimeEq;
 use tokio::io::AsyncWriteExt;
 use tokio_util::{io::ReaderStream, sync::CancellationToken, task::TaskTracker};
 use uuid::Uuid;
-use vidora::{MAX_INPUT, Processor, Tools};
+use vidora::{MAX_INPUT, MediaKind, Processor, Tools};
 
 const UPLOAD_TIMEOUT: Duration = Duration::from_secs(90);
 const ARTIFACT_TIMEOUT: Duration = Duration::from_secs(45);
@@ -407,21 +407,73 @@ async fn process(
     source.close().map_err(|_| "storage_error")?;
     let job = job.map_err(|record| {
         eprintln!("processing_failed error={:?}", record.error);
-        "processing_failed"
+        match record.error {
+            Some(vidora::Error::UnsupportedHdr) => "unsupported_hdr",
+            Some(vidora::Error::InputSize) => "input_size",
+            _ => "processing_failed",
+        }
     })?;
     let record = serde_json::to_string(job.record()).map_err(|_| "storage_error")?;
-    let sizes: Vec<_> = job.record().clips.iter().map(|clip| clip.bytes).collect();
+    let (kind, sizes, artifacts, names): (&str, Vec<u64>, Vec<ArtifactMeta>, Vec<String>) =
+        match job.kind() {
+            MediaKind::Video => (
+                "video",
+                job.record().clips.iter().map(|clip| clip.bytes).collect(),
+                job.record()
+                    .clips
+                    .iter()
+                    .map(|_| ArtifactMeta {
+                        mime: "video/mp4".into(),
+                        width: None,
+                        height: None,
+                        thumbnail: None,
+                    })
+                    .collect(),
+                job.record()
+                    .clips
+                    .iter()
+                    .map(|clip| clip.name.clone())
+                    .collect(),
+            ),
+            MediaKind::Photo => {
+                let thumbnail = job.photo_thumbnail().map(str::to_owned);
+                (
+                    "photo",
+                    job.record()
+                        .photos
+                        .iter()
+                        .map(|photo| photo.bytes)
+                        .collect(),
+                    job.record()
+                        .photos
+                        .iter()
+                        .map(|photo| ArtifactMeta {
+                            mime: "image/jpeg".into(),
+                            width: Some(photo.width),
+                            height: Some(photo.height),
+                            thumbnail: thumbnail.clone(),
+                        })
+                        .collect(),
+                    job.record()
+                        .photos
+                        .iter()
+                        .map(|photo| photo.name.clone())
+                        .collect(),
+                )
+            }
+        };
     let directory = api.media.join(id);
     private_dir(&directory).map_err(|_| "storage_error")?;
     let path = job.export(&directory).await.map_err(|_| "export_failed")?;
     // Commit durable artifacts before publishing their SQLite record.
-    for index in 0..sizes.len() {
-        sync_path(&path.join(format!("clip-{index:03}.mp4"))).await?;
+    for name in &names {
+        sync_path(&path.join(name)).await?;
     }
     for directory in [&path, &directory, &api.media] {
         sync_path(directory).await?;
     }
     let sizes = serde_json::to_string(&sizes).map_err(|_| "storage_error")?;
+    let artifact_meta = serde_json::to_string(&artifacts).map_err(|_| "storage_error")?;
     let name = path
         .file_name()
         .and_then(|name| name.to_str())
@@ -430,7 +482,7 @@ async fn process(
         .store
         .lock()
         .unwrap()
-        .ready(id, name, &sizes, &record)
+        .ready(id, kind, name, &sizes, &artifact_meta, &record)
         .map_err(|_| "database_error")?
     {
         Ok(())
@@ -454,6 +506,11 @@ async fn artifact(
     if index != job.next_index || job.pending {
         return Err(missing());
     }
+    let content_type = match job.kind.as_str() {
+        "video" => "video/mp4",
+        "photo" => "image/jpeg",
+        _ => return Err(missing()),
+    };
     let path = job.artifact(&api.media, index).ok_or_else(missing)?;
     let size = job.sizes[index];
     let file = match tokio::fs::File::open(path).await {
@@ -487,7 +544,7 @@ async fn artifact(
     });
     Ok((
         [
-            (header::CONTENT_TYPE, "video/mp4".to_owned()),
+            (header::CONTENT_TYPE, content_type.to_owned()),
             (header::CONTENT_LENGTH, size.to_string()),
             (header::CACHE_CONTROL, "no-store".to_owned()),
         ],

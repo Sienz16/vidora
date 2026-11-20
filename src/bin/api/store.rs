@@ -5,32 +5,58 @@ use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
 const ACTIVE: &str = "state IN ('receiving', 'processing', 'ready', 'delivering')";
-const COLUMNS: &str = "id, state, next_index, pending, sizes, error, directory";
+const COLUMNS: &str =
+    "id, kind, state, next_index, pending, sizes, artifact_meta, error, directory";
+
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+pub struct ArtifactMeta {
+    pub mime: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub width: Option<u32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub height: Option<u32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub thumbnail: Option<String>,
+}
 
 #[derive(Debug, Serialize)]
 pub struct Job {
     pub id: String,
+    pub kind: String,
     pub state: String,
     pub next_index: usize,
     pub pending: bool,
     pub sizes: Vec<u64>,
+    pub artifacts: Vec<ArtifactMeta>,
     pub error: Option<String>,
     #[serde(skip)]
     pub directory: Option<String>,
 }
 
 fn job(row: &Row<'_>) -> rusqlite::Result<Job> {
-    let sizes: String = row.get(4)?;
+    let sizes: String = row.get(5)?;
+    let artifacts: Option<String> = row.get(6)?;
     Ok(Job {
         id: row.get(0)?,
-        state: row.get(1)?,
-        next_index: usize::from(row.get::<_, u8>(2)?),
-        pending: row.get(3)?,
+        kind: row.get(1)?,
+        state: row.get(2)?,
+        next_index: usize::from(row.get::<_, u8>(3)?),
+        pending: row.get(4)?,
         sizes: serde_json::from_str(&sizes).map_err(|error| {
-            rusqlite::Error::FromSqlConversionFailure(4, rusqlite::types::Type::Text, error.into())
+            rusqlite::Error::FromSqlConversionFailure(5, rusqlite::types::Type::Text, error.into())
         })?,
-        error: row.get(5)?,
-        directory: row.get(6)?,
+        artifacts: match artifacts {
+            Some(raw) => serde_json::from_str(&raw).map_err(|error| {
+                rusqlite::Error::FromSqlConversionFailure(
+                    6,
+                    rusqlite::types::Type::Text,
+                    error.into(),
+                )
+            })?,
+            None => Vec::new(),
+        },
+        error: row.get(7)?,
+        directory: row.get(8)?,
     })
 }
 
@@ -60,10 +86,12 @@ impl Store {
              CREATE TABLE IF NOT EXISTS jobs (
                  id TEXT PRIMARY KEY,
                  message_hash TEXT NOT NULL UNIQUE,
+                 kind TEXT NOT NULL DEFAULT 'video',
                  state TEXT NOT NULL,
                  next_index INTEGER NOT NULL DEFAULT 0,
                  pending INTEGER NOT NULL DEFAULT 0,
                  sizes TEXT NOT NULL DEFAULT '[]',
+                 artifact_meta TEXT,
                  error TEXT,
                  directory TEXT,
                  record TEXT,
@@ -71,6 +99,23 @@ impl Store {
              );
              CREATE UNIQUE INDEX IF NOT EXISTS one_active ON jobs((1)) WHERE {ACTIVE};"
         ))?;
+        let mut cols = Vec::new();
+        {
+            let mut stmt = db.prepare("PRAGMA table_info(jobs)")?;
+            let rows = stmt.query_map([], |row| row.get::<_, String>(1))?;
+            for col in rows {
+                cols.push(col?);
+            }
+        }
+        if !cols.iter().any(|name| name == "kind") {
+            db.execute(
+                "ALTER TABLE jobs ADD COLUMN kind TEXT NOT NULL DEFAULT 'video'",
+                [],
+            )?;
+        }
+        if !cols.iter().any(|name| name == "artifact_meta") {
+            db.execute("ALTER TABLE jobs ADD COLUMN artifact_meta TEXT", [])?;
+        }
         Ok(Self(db))
     }
 
@@ -147,14 +192,17 @@ impl Store {
     pub fn ready(
         &self,
         id: &str,
+        kind: &str,
         directory: &str,
         sizes: &str,
+        artifact_meta: &str,
         record: &str,
     ) -> rusqlite::Result<bool> {
         Ok(self.0.execute(
-            "UPDATE jobs SET state = 'ready', directory = ?2, sizes = ?3, record = ?4,
-             expires = unixepoch() + 1200 WHERE id = ?1 AND state = 'processing'",
-            params![id, directory, sizes, record],
+            "UPDATE jobs SET state = 'ready', kind = ?2, directory = ?3, sizes = ?4,
+             artifact_meta = ?5, record = ?6, expires = unixepoch() + 1200
+             WHERE id = ?1 AND state = 'processing'",
+            params![id, kind, directory, sizes, artifact_meta, record],
         )? == 1)
     }
 
@@ -162,7 +210,8 @@ impl Store {
         Ok(self.0.execute(
             &format!(
                 "UPDATE jobs SET state = 'failed', error = ?2, pending = 0, directory = NULL,
-                 sizes = '[]', record = NULL, expires = NULL WHERE id = ?1 AND {ACTIVE}"
+                 sizes = '[]', artifact_meta = NULL, record = NULL, expires = NULL
+                 WHERE id = ?1 AND {ACTIVE}"
             ),
             params![id, error],
         )? == 1)
@@ -172,7 +221,8 @@ impl Store {
         Ok(self.0.execute(
             "UPDATE jobs SET state = 'failed',
              error = CASE WHEN pending THEN 'delivery_uncertain' ELSE 'expired' END,
-             pending = 0, directory = NULL, sizes = '[]', record = NULL, expires = NULL
+             pending = 0, directory = NULL, sizes = '[]', artifact_meta = NULL,
+             record = NULL, expires = NULL
              WHERE id = ?1 AND expires <= unixepoch()",
             [id],
         )? == 1)
@@ -193,6 +243,7 @@ impl Store {
                      directory = iif(state_after.is_last, NULL, directory),
                      record = iif(state_after.is_last, NULL, record),
                      sizes = iif(state_after.is_last, '[]', sizes),
+                     artifact_meta = iif(state_after.is_last, NULL, artifact_meta),
                      expires = iif(state_after.is_last, NULL, expires)
                      FROM (SELECT next_index + 1 = json_array_length(sizes) AS is_last
                            FROM jobs WHERE id = ?1) AS state_after
@@ -233,12 +284,12 @@ impl Job {
         {
             return None;
         }
-        Some(
-            media
-                .join(&self.id)
-                .join(directory)
-                .join(format!("clip-{index:03}.mp4")),
-        )
+        let file = match self.kind.as_str() {
+            "video" => format!("clip-{index:03}.mp4"),
+            "photo" => format!("photo-{index:03}.jpg"),
+            _ => return None,
+        };
+        Some(media.join(&self.id).join(directory).join(file))
     }
 
     pub fn intact(&self, media: &Path) -> bool {
