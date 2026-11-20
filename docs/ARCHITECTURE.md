@@ -20,7 +20,7 @@ Rust service
   axum API → SQLite jobs → one Tokio worker → ffprobe/FFmpeg
                                       │
                                       ▼
-                           validated MP4 output clips
+                           validated MP4 clips or HD JPEG output
                                       │
                                       ▼
                            automatic media cleanup
@@ -60,7 +60,7 @@ Responsibilities:
 
 Use Node.js 24, Baileys, and native `fetch`/streams where practical. Do not add a second web framework solely for outbound HTTP requests.
 
-The sidecar checks the direct chat's authenticated phone JID or its Baileys-provided LID mapping. It accepts video documents with a declared length and plaintext SHA-256. It downloads from verified WhatsApp media hosts over TLS, checks the media MAC, and streams plaintext to the API, which checks the length and hash before processing. The sidecar prepares each document before reserving its send, waits for the WhatsApp server acknowledgement, and retries the internal acknowledgement independently. A missing server acknowledgement leaves the send uncertain and prevents a blind replay. A server acknowledgement does not establish playback or a read receipt.
+The sidecar checks the direct chat's authenticated phone JID or its Baileys-provided LID mapping. It accepts video documents (up to 300 MiB) and photo documents or direct HD `imageMessage` photos (up to 50 MiB) with a declared length and plaintext SHA-256. It downloads from verified WhatsApp media hosts over TLS using `document` or `image` media keys respectively, checks the media MAC, and streams plaintext to the API, which checks the length and hash before probing and classifying the media. Video outputs (`kind: "video"`) are prepared and delivered in order as `video/mp4` documents; photo outputs (`kind: "photo"`) are prepared and delivered as `image/jpeg` `imageMessage` attachments using FFmpeg-generated `width`, `height`, and a 32-px `jpegThumbnail`. Each artifact is prepared before reserving its send, waits for the WhatsApp server acknowledgement, and retries the internal acknowledgement independently. A missing server acknowledgement leaves the send uncertain and prevents a blind replay. A server acknowledgement does not establish playback or a read receipt.
 
 The sidecar keeps authentication and Signal keys in its own SQLite database. An OS-backed SQLite lock prevents a second process from opening the same session, including during pairing. Session data and media remain on separate storage.
 
@@ -73,8 +73,8 @@ Exact field schemas may be implemented in code, but preserve these semantics:
 | `GET /health` | Minimal health without personal or session information |
 | `POST /internal/v1/jobs` | Stream one media body with `Content-Length`, `X-Message-Id`, `X-Content-Sha256` (lowercase hex), and optional `X-Display-Name` |
 | `GET /internal/v1/jobs` | Read the active or latest job, or look up a specific message using `X-Message-Id` |
-| `GET /internal/v1/jobs/:id` | Return state, progress, validated artifact metadata, or a safe error |
-| `GET /internal/v1/jobs/:id/artifacts/:index` | Stream one validated clip to the authenticated sidecar |
+| `GET /internal/v1/jobs/:id` | Return `kind`, state, progress, `sizes`, `artifacts` metadata (including ephemeral `thumbnail` for photos), or a safe error |
+| `GET /internal/v1/jobs/:id/artifacts/:index` | Stream one validated clip (`video/mp4`) or photo (`image/jpeg`) to the authenticated sidecar |
 | `POST /internal/v1/jobs/:id/delivery` | Begin a send or record its acknowledgement with `{"action":"begin","index":0}` or `{"action":"ack","index":0}` |
 | `POST /internal/v1/jobs/:id/terminal` | Record a terminal sidecar failure when delivery cannot continue |
 
@@ -85,7 +85,7 @@ Requirements:
 - Artifact indices and job IDs are validated server-side. Paths are resolved from server-owned records, never raw request strings.
 - Request bodies and downloads are streamed and bounded; buffering an entire 300 MiB video in memory is not acceptable.
 - Job creation returns 202 for a new upload, 200 for a duplicate, and 409 when another job is active. The display name is validated and discarded. SQLite retains a SHA-256 digest of the message ID for idempotency.
-- Artifact indices start at zero. The API serves only the next unacknowledged artifact. A durable `begin` prevents a second send attempt after an ambiguous crash or disconnect. Transient preparation failures can be retried before `begin`, and `ack` can be retried afterwards.
+- Artifact indices start at zero. The API serves only the next unacknowledged artifact (`clip-NNN.mp4` for `video`, `photo-NNN.jpg` for `photo`). A durable `begin` prevents a second send attempt after an ambiguous crash or disconnect. Transient preparation failures can be retried before `begin`, and `ack` can be retried afterwards. Ephemeral `artifact_meta` (including base64 photo thumbnails) is cleared in SQLite alongside `directory` and `record` on terminal failure, expiration, or final delivery acknowledgement.
 
 ## Job state
 

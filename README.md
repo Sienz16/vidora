@@ -6,33 +6,33 @@
 ![Node.js 24](https://img.shields.io/badge/Node.js-24-5FA04E?style=flat-square&logo=nodedotjs)
 ![Docker Compose](https://img.shields.io/badge/Docker-Compose-2496ED?style=flat-square&logo=docker)
 
-Vidora prepares short MP4 clips for WhatsApp Status. Run the Rust CLI locally or use the self-hosted bot workflow. The bot accepts video documents from one owner and sends the parts in order. The owner posts them to Status manually. The sidecar has been tested with mocks and needs a live secondary-account trial.
+Vidora prepares short MP4 clips and HD JPEG photos for WhatsApp Status. Run the Rust CLI locally or use the self-hosted bot workflow. The bot accepts video documents and photos (as documents or direct HD images) from one owner and returns prepared MP4 parts in order or a prepared HD JPEG for manual posting or forwarding to Status. The sidecar has been tested with mocks and needs a live secondary-account trial.
 
 ## Media support
 
-- Accepts a local video up to 300 MiB and 10 minutes, with one video stream and optional audio. Supported container families include MP4/MOV, Matroska/WebM, AVI, and MPEG-TS. Detected HDR is rejected.
-- Uses FFmpeg and the candidate `hd29` profile to fit the video onto a 1080 × 1920 canvas while preserving its aspect ratio.
-- Produces ordered H.264 MP4 clips with AAC audio when present. Each clip is validated against a 29-second limit and a 15,800,000-byte cap.
-- Removes working media after processing and exports validated clips to a private directory under the destination you choose.
+- **Videos (`hd29`):** Accepts a local video up to 300 MiB and 10 minutes, with one video stream and optional audio across MP4/MOV, Matroska/WebM, AVI, and MPEG-TS. Tone-maps standard BT.2020 HLG, HDR10, and compatible Dolby Vision Profile 8 to SDR BT.709, fits onto a 1080 × 1920 canvas while preserving aspect ratio, and exports ordered H.264/AAC MP4 clips capped at 29 seconds and 15,800,000 bytes.
+- **Photos (`photo_hd`):** Accepts a local JPEG, PNG, WebP, BMP, TIFF, or single-frame HEIC/AVIF photo up to 50 MiB (at most 12,288 px per edge and 52 MP). Applies EXIF/display rotation into pixels, flattens alpha channels onto white, tone-maps supported BT.2020 HLG/PQ photos to SDR, downscales only if longer than 3840 px while preserving aspect ratio (never upscales, crops, or pads), strips metadata, and exports a `yuvj420p` JPEG capped at 4,900,000 bytes.
+- Removes working media after processing and exports validated outputs to a private directory under the destination you choose.
 
-Vidora is a clean-room project. The encoding profile is a candidate for testing, and WhatsApp playback quality still needs validation on real devices. See the [encoding profile and test plan](docs/ENCODING.md).
+Vidora is a clean-room project. Both encoding profiles (`hd29` and `photo_hd`) are candidates for testing, and WhatsApp playback/image quality still needs validation on real devices. See the [encoding profile and test plan](docs/ENCODING.md).
 
 ## Run the local processor
 
-Use a stable Rust toolchain with Cargo and FFmpeg built with `libx264`. The container pins FFmpeg 9.0.2. Put both `ffmpeg` and `ffprobe` on `PATH` for local use.
+Use a stable Rust toolchain with Cargo and FFmpeg 9 with `libx264`. The container pins FFmpeg 9.0.2. Put both `ffmpeg` and `ffprobe` on `PATH` for local use.
 
 ```sh
 git clone https://github.com/Sienz16/vidora.git
 cd vidora
 mkdir -p output
 cargo run --locked -- ./sample.mp4 ./output
+cargo run --locked -- ./sample.jpg ./output
 ```
 
-Replace `./sample.mp4` with your input video. On success, the CLI prints a redacted JSON job record followed by the path to the exported clips. The source file stays in place. Manage or delete the exported copies after use.
+Replace `./sample.mp4` or `./sample.jpg` with your input video or photo. On success, the CLI prints a redacted JSON job record followed by the path to the exported outputs. The source file stays in place. Manage or delete the exported copies after use.
 
 ## Run the bot
 
-Use Docker Engine and Compose on Linux. Configure a private `.env` from `.env.example`, start the API, and pair a dedicated secondary WhatsApp account from a private terminal. After pairing, start the stack and send a video as a document from the configured owner account. Use `/help` or `/status` in the chat. See the [deployment runbook](docs/DEPLOYMENT.md).
+Use Docker Engine and Compose on Linux. Configure a private `.env` from `.env.example`, start the API, and pair a dedicated secondary WhatsApp account from a private terminal. After pairing, start the stack and send a video as a document or a photo (as a document or HD image) from the configured owner account. Use `/help` or `/status` in the chat. See the [deployment runbook](docs/DEPLOYMENT.md).
 
 The Compose smoke test uses generated media and runs without a WhatsApp session. Live trial and VPS verification are pending. See the [testing guide](docs/TESTING.md).
 

@@ -100,6 +100,32 @@ REA limitations preserved:
 - ZIP inventory covers central-directory entries. Non-entry bytes, including an APK Signing Block or ZIP comment, are outside that occurrence inventory.
 - Zero inventory integrity contradictions is not signature verification, official provenance, a malware verdict, or complete format-specific analysis.
 
+### Split native ARM64 APK archive (`config.arm64_v8a.apk`)
+
+Recorded on 2026-11-20:
+
+- `config.arm64_v8a.apk` SHA-256: `58003c749f56adeb904421ed4077b55dc10b172ee078368f898f3f94f8ab5c0e`
+- `identify_flutter_build`: `flutter_detected: false` (`ev_940074147242cd2aa9bd7bb09318b54a75d1c09cf185821d0be0d7abee7c8330`, complete coverage)
+- `inspect_artifact` Parent Evidence ID: `ev_20731756106db310d8635cf000e127e1ec36063755ad73f848b13288dd1ea250`
+- Summary Evidence ID: `ev_1d2eb9bcd455e8e087880a21376d094e7b3bd72dbb40dd6f8233d1f6d8974d74`
+- Graph: 17 nodes, 17 occurrences, 16 edges; 0 integrity contradictions
+- Observed native libraries under `lib/arm64-v8a/`: `libffmpegkit.so`, `libffmpegkit_abidetect.so`, `libavcodec.so`, `libavdevice.so`, `libavfilter.so`, `libavformat.so`, `libavutil.so`, `libswresample.so`, `libswscale.so`, `libc++_shared.so`, and third-party/AndroidX libraries.
+
+### Extracted base APK DEX bytecode observations (`com.yulva.purepixel.apk`)
+
+Recorded on 2026-11-20 using REA `extract_artifact` (`ev_5c29b5d619962e7bad30026e69c8fee300f7aaecdaf30443a0baf275472dedd0`, containment verified, 0 integrity contradictions) followed by read-only Python Dalvik bytecode disassembly of `classes.dex` and `classes2.dex`:
+
+- Internal package namespace inside `com.yulva.purepixel.apk` is `com.damtechdesigns.purepixel.*`, establishing a concrete code link between the `com.yulva.purepixel` package and the `com.damtechdesigns.purepixel` identifier noted above.
+- `CompressView`, `Lnh1`, `Lp`, `Lkm0`, and `Lkw7` implement two distinct static photo-processing paths in the Android client:
+  1. **Default bot-delivery photo path (`Q0 = true` when `photoAsVideo` is false and `delivery_mode` is not `"share"`, `.jpg` output):**
+     - Decodes bitmap with power-of-two `inSampleSize` pre-scaling targeting `photoJpegLongEdge` (default `3840`, or `1.5 * 3840` decode cap before exact resize).
+     - Reads EXIF orientation (`3` -> 180°, `6` -> 90°, `8` -> 270°) and rotates the decoded bitmap into pixel orientation.
+     - Downscales only if larger than `3840` px on the long edge (`Math.min(limit, dim)`), preserving original aspect ratio without upscaling, cropping, or padding.
+     - Compresses JPEG starting at `photoJpegQuality` (default `92`, clamped `[60, 100]`). If the output exceeds `4,900,000` bytes, steps JPEG quality down by `5` to `60`; if still above `4,900,000` bytes and `max(width, height) >= 640`, scales dimensions by `0.85` and repeats.
+     - Uploads the `.jpg` (`kind: "image"`, `Content-Type: image/jpeg`) via `issueUploadTicket` (`Lkw7->k` / `Lkw7->s`) so the WhatsApp bot sends it back to the user's chat for manual forwarding to Status.
+  2. **Fallback `photoAsVideo` path (`Q0 = false`, `.mp4` output):**
+     - Downscales to max long edge `1920`, loops the frame into a 5-second H.264 MP4 (`-filter:v 'loop=-1:1:0,trim=duration=5,crop=trunc(iw/2)*2:trunc(ih/2)*2' -pix_fmt yuv420p -c:v libx264 -x264-params no-mbtree=1 -crf 23 -maxrate 1600k`).
+
 The opened REA archive sessions were closed.
 
 ## Deep Android analysis blocker
@@ -108,14 +134,14 @@ The opened REA archive sessions were closed.
 
 The host also has no working Java runtime available to `java`, `keytool`, or `jarsigner`; no Android SDK `apksigner` was found. No JDK, JADX, or other prerequisites were installed.
 
-Therefore there is currently no decompiled-class evidence for:
+Therefore there is currently no JADX-decompiled Java source or server-side evidence for:
 
-- FFmpeg/MediaCodec usage or actual encoding constants
+- Server-side bot delivery behavior behind `issueUploadTicket` (e.g., whether the WhatsApp bot sends `imageMessage` vs `documentMessage`, or adds any server-side transform)
 - Trackers, endpoint usage, exported-component behavior, or runtime permission use
-- On-device versus server processing beyond vendor statements
 - Actual signature validity or runtime anti-tampering behavior
+- Whether WhatsApp Status preserves quality for forwarded `3840`-px `<= 4.9 MB` JPEGs on real devices
 
-Resume with `inspect_android_package`, then focused class/method/reference analysis only after an approved working JDK and JADX provider are configured. Preserve artifact digests and incomplete coverage.
+Resume with `inspect_android_package` only after an approved working JDK and JADX provider are configured. Preserve artifact digests and incomplete coverage.
 
 ## Independent implementation reference
 
@@ -134,12 +160,13 @@ StatusDrop documents local FFmpeg/x264 processing, candidate profiles, empirical
 Supported conclusions:
 
 - A Node.js WhatsApp sidecar plus an independent media-processing service is feasible.
-- FFmpeg/H.264 candidate profiles can be implemented and tested without copying PURESTATUS.
-- The safest first workflow returns clips to the owner and leaves Status posting manual.
+- FFmpeg/H.264 video candidate profiles and FFmpeg JPEG photo preparation (`<= 3840` px long edge, `<= 4,900,000` bytes) can be implemented and tested without copying PURESTATUS.
+- The safest first workflow returns prepared clips/images to the owner and leaves Status posting/forwarding manual.
 
 Inferences requiring validation:
 
-- The candidate `hd29` profile will improve Status quality on the owner's devices.
+- The candidate `hd29` video profile and `photo_hd` JPEG profile will improve Status quality on the owner's devices.
+- Forwarding the bot-delivered `imageMessage` directly to Status preserves better detail than uploading the original photo from the phone gallery.
 - The chat-resend/forward workflow described by StatusDrop provides a benefit.
 - WhatsApp will preserve any particular size, codec, frame rate, or quality.
 

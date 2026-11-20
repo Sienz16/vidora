@@ -56,12 +56,27 @@ Include at least:
 | Rotated-phone video | Rotation metadata handling |
 | Variable-frame-rate source | Timestamp and sync handling |
 | Silent video | Optional audio mapping |
-| HDR/HLG source | Explicit unsupported or tested tone-map behavior |
+| BT.2020 HLG and PQ sources | SDR BT.709 tone mapping, including segmentation past 29 seconds |
+| HDR with incomplete color tags or incompatible Dolby Vision metadata | Rejection before encoding |
 | Video longer than 29 seconds | Correct segmentation and ordering |
 | Source longer than 10 minutes | Rejection before encode |
 | Corrupt/truncated file | Safe probe failure |
 | Additional subtitle/data streams | MVP stream-rule enforcement |
 | Filename containing spaces and shell metacharacters | Path/command-injection resistance |
+
+### Photo fixtures (`photo_hd`)
+
+| Fixture | Purpose |
+| --- | --- |
+| 1080×1920 JPEG | Golden path (no upscaling, metadata stripped, 32 px JPEG thumbnail) |
+| 4200×2800 PNG | Downscale-only to 3840×2560 preserving aspect ratio |
+| RGBA PNG with alpha channel | Solid white background flattening to `yuvj420p` |
+| Lossless WebP still (`webp_pipe`) | Extensionless `webp_pipe` decoding and JPEG conversion |
+| EXIF Orientation=6 JPEG | Pixel rotation baked into output (`0` residual rotation) |
+| HDR BT.2020 HLG/PQ vs SDR HEIC (`Content light level metadata`) | HDR tone-mapping vs SDR HEIC acceptance |
+| Detailed 1600×1200 PNG with lowered output cap | Quality ladder (`q=2..10`) and `0.85×` scale-step retries, plus `ClipSize` rejection when cap is unreachable |
+| Corrupt JPEG, 1×1 PNG, 12300×16 PNG, 7300×7300 PNG (>52 MP), 2-frame TIFF, >50 MiB BMP | Safe pre-encode rejection and cleanup |
+| Photo filename with spaces and shell metacharacters | Path/command-injection resistance |
 
 Do not commit large generated fixtures; generate them deterministically in test temp directories.
 
@@ -84,10 +99,10 @@ Verify cleanup and redacted logs for each case.
 Only with explicit approval and a dedicated secondary number:
 
 1. Confirm another account and a group cannot start a job.
-2. Send each representative fixture as a document.
-3. Record acknowledgment, processing time, returned parts, sizes, and failures.
+2. Send each representative video fixture as a document, and each photo fixture both as a document and as a direct HD image.
+3. Record acknowledgment, processing time, returned parts/image dimensions and byte size, and failures.
 4. Verify output metadata independently with ffprobe.
-5. Run A/B/C posting paths from `ENCODING.md` using the same source and WhatsApp settings.
+5. Run A/B/C posting paths from `ENCODING.md` for both videos and photos using the same source and WhatsApp settings.
 6. Record device model, OS, WhatsApp version, media upload quality, date, and observed result.
 7. Test WhatsApp reconnection and VPS restart without duplicate delivery.
 8. Verify input/output deletion and inspect logs for personal data or secrets.
