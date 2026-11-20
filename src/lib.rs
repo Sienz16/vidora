@@ -25,6 +25,49 @@ use tokio::{
 pub const MAX_INPUT: u64 = 300 * 1024 * 1024;
 pub const MAX_PHOTO_INPUT: u64 = 50 * 1024 * 1024;
 
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum VideoProfile {
+    #[default]
+    Hd29,
+    Status720,
+}
+
+impl std::str::FromStr for VideoProfile {
+    type Err = &'static str;
+
+    fn from_str(value: &str) -> Result<Self, Self::Err> {
+        match value {
+            "hd29" => Ok(Self::Hd29),
+            "status720" => Ok(Self::Status720),
+            _ => Err("invalid_video_profile"),
+        }
+    }
+}
+
+impl VideoProfile {
+    pub fn from_env() -> Result<Self, &'static str> {
+        match env::var("VIDORA_VIDEO_PROFILE") {
+            Ok(value) => value.parse(),
+            Err(env::VarError::NotPresent) => Ok(Self::default()),
+            Err(env::VarError::NotUnicode(_)) => Err("invalid_video_profile"),
+        }
+    }
+
+    fn canvas(self) -> (u32, u32) {
+        match self {
+            Self::Hd29 => (1080, 1920),
+            Self::Status720 => (720, 1280),
+        }
+    }
+
+    fn name(self) -> &'static str {
+        match self {
+            Self::Hd29 => "hd29",
+            Self::Status720 => "status720",
+        }
+    }
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum MediaKind {
@@ -249,6 +292,7 @@ async fn receive(
 pub struct Processor {
     tools: Tools,
     root: PathBuf,
+    video_profile: VideoProfile,
     clip_cap: u64,
     photo_cap: u64,
 }
@@ -259,9 +303,15 @@ impl Processor {
         Ok(Self {
             tools,
             root: root.canonicalize()?,
+            video_profile: VideoProfile::default(),
             clip_cap: CLIP_CAP,
             photo_cap: PHOTO_CAP,
         })
+    }
+
+    pub fn with_video_profile(mut self, profile: VideoProfile) -> Self {
+        self.video_profile = profile;
+        self
     }
 
     pub async fn process(
@@ -353,11 +403,11 @@ impl Processor {
         );
         match media::probe(&self.tools, directory, "source")
             .await?
-            .classify(bytes)?
+            .classify(bytes, self.video_profile)?
         {
             ClassifiedInput::Video(video) => {
                 record.kind = Some(MediaKind::Video);
-                record.profile = Some("hd29");
+                record.profile = Some(self.video_profile.name());
                 record.input = Some(Input::Video(video));
                 self.process_video(directory, record).await?;
                 Ok(None)
@@ -386,7 +436,7 @@ impl Processor {
         )
         .await?;
         for retry in [false, true] {
-            let args = media::encode_args(input, retry);
+            let args = media::encode_args(input, self.video_profile, retry);
             record.encode_attempts.push(args);
             tool::run(
                 &self.tools.ffmpeg,
@@ -498,7 +548,11 @@ impl Processor {
             }
             let (duration, video_duration, video) = media::probe(&self.tools, directory, &name)
                 .await?
-                .validate_clip(input.audio_codec.is_some(), input.hdr_transfer.is_some())
+                .validate_clip(
+                    self.video_profile.canvas(),
+                    input.audio_codec.is_some(),
+                    input.hdr_transfer.is_some(),
+                )
                 .map_err(|_| Error::InvalidOutput)?;
             media::decode(&self.tools, directory, &name, duration, video.frames).await?;
             total += video_duration;
@@ -742,6 +796,64 @@ mod tests {
             );
         }
         assert!(!root.join("injected").exists());
+    }
+
+    #[tokio::test]
+    async fn converts_status720_clip_and_cleans_work() {
+        let fixtures = tempfile::tempdir().unwrap();
+        let work = tempfile::tempdir().unwrap();
+        let output = tempfile::tempdir().unwrap();
+        let source = fixture(
+            fixtures.path(),
+            "portrait.mp4",
+            &[
+                "-f",
+                "lavfi",
+                "-i",
+                "testsrc2=s=1080x1920:r=30:d=0.8",
+                "-c:v",
+                "libx264",
+                "-preset",
+                "ultrafast",
+                "-threads:v",
+                "2",
+            ],
+        );
+        let mut processor = Processor::new(Tools::from_path().unwrap(), work.path())
+            .unwrap()
+            .with_video_profile(VideoProfile::Status720);
+        let job = from_file(&mut processor, &source).await.unwrap();
+        assert_eq!(job.record().profile, Some("status720"));
+        assert_eq!(job.record().clips.len(), 1);
+        assert!(job.record().clips[0].duration <= 29.0);
+
+        let saved = job.export(output.path()).await.unwrap();
+        assert_empty(work.path());
+        let clip = saved.join("clip-000.mp4");
+        assert!((1..=15_800_000).contains(&clip.metadata().unwrap().len()));
+        let probe = std::process::Command::new(&processor.tools.ffprobe)
+            .args([
+                "-v",
+                "error",
+                "-select_streams",
+                "v:0",
+                "-show_entries",
+                "stream=codec_name,profile,level,pix_fmt,width,height",
+                "-of",
+                "json",
+            ])
+            .arg(clip)
+            .output()
+            .unwrap();
+        assert!(probe.status.success());
+        let metadata: serde_json::Value = serde_json::from_slice(&probe.stdout).unwrap();
+        assert_eq!(
+            metadata["streams"][0],
+            serde_json::json!({
+                "codec_name": "h264", "profile": "High", "level": 40,
+                "pix_fmt": "yuv420p", "width": 720, "height": 1280
+            })
+        );
     }
 
     #[tokio::test]

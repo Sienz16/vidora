@@ -9,6 +9,7 @@ services:
     security_opt: [no-new-privileges:true]
     environment:
       VIDORA_BIND_IP: 0.0.0.0
+      VIDORA_VIDEO_PROFILE: ${VIDORA_VIDEO_PROFILE:-hd29}
       INTERNAL_API_TOKEN: ${INTERNAL_API_TOKEN:?set INTERNAL_API_TOKEN}
     volumes:
       - media:/var/lib/vidora

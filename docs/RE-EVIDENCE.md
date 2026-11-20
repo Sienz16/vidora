@@ -177,3 +177,13 @@ Unresolved:
 - Current WhatsApp behavior across the owner's exact app/device combinations.
 
 Do not turn these inferences or unknowns into product claims.
+
+## Additional static video string observation
+
+Static DEX string-table extraction on 2026-11-20 from the acquired PURESTATUS `2026.25R` base APK (SHA-256 `ef70aaec8ead265626f404275a5d0065fcbef8b7fbf010e391c408a58fd85ba8`) found strings for 1080×1920 fit-and-pad and the FFmpeg options shown below.
+
+```text
+-c:v libx264 -preset veryfast -crf 20 -r 30 -c:a aac -b:a 128k -movflags +faststart
+```
+
+This video observation covers string constants only. No method decompilation, control-flow trace, or runtime behavior was established for these constants. The strings support a candidate pre-encode configuration for testing. Actual invocation and WhatsApp's treatment of the result remain unknown.

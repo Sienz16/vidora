@@ -30,6 +30,22 @@ WhatsApp publicly documents a maximum Status duration of 90 seconds. The 15.8 MB
 
 These values are a test profile, not a promise of transparent quality or passthrough behavior.
 
+## Experimental video profile `status720`
+
+This candidate is unverified on WhatsApp Status. Set `VIDORA_VIDEO_PROFILE=status720` in the CLI or API environment, or in the Compose `.env` for the API. The default is `hd29`. The CLI and API reject other values when set directly in their environment.
+
+| Setting | `hd29` | `status720` |
+| --- | --- | --- |
+| Canvas | 1080×1920 | 720×1280 |
+| Initial CRF | 23 | 20 |
+| Initial maximum rate and buffer | 3800 kbit/s, 5700 kbit/s | 3800 kbit/s, 5700 kbit/s |
+| Preset | `medium` | `medium` |
+| Oversize retry CRF, maximum rate, and buffer | 27, 3000 kbit/s, 4500 kbit/s | 27, 3000 kbit/s, 4500 kbit/s |
+| Clip duration and byte caps | 29 seconds, 15,800,000 bytes | 29 seconds, 15,800,000 bytes |
+| Job record profile | `hd29` | `status720` |
+
+Both profiles use the same H.264 High / 4.0, `yuv420p`, frame-rate handling, HDR conversion, AAC settings, and MP4 fast start. The bot delivers video as MP4 documents and photos as `imageMessage` attachments for manual posting.
+
 ## MVP photo profile: `photo_hd`
 
 Informed by static Dalvik bytecode inspection of `com.yulva.purepixel` (`2026.25R`, documented in `RE-EVIDENCE.md`), `photo_hd` prepares still images as sRGB baseline-compatible JPEGs for chat delivery and manual forwarding to WhatsApp Status:
@@ -97,25 +113,23 @@ Every photo artifact (`photo-000.jpg`) must pass ffprobe (`-f jpeg_pipe`) and fu
 - File size `1..=4,900,000` bytes
 - Single-frame decodability without fatal FFmpeg errors
 
-## Required A/B quality experiment
+## Required Status quality experiment
 
-For each representative source, record device model, OS, WhatsApp version, settings, source metadata, output metadata, and date.
+For each representative source, use the same account and media upload quality setting. Record the device model, OS, mobile WhatsApp version, Desktop app or Web client version used, date, and source and output ffprobe metadata. Encode the same source with both video profiles.
 
-For videos, compare:
+| Path | Video | Photo |
+| --- | --- | --- |
+| A | Original from the phone gallery | Original from the phone gallery |
+| B | Save the bot clip to the phone gallery and post it directly to Status | Save the bot JPEG to the gallery and post it to Status |
+| C | Save the bot clip, send it in a mobile chat with HD selected, then forward the message to My Status | Forward the bot's `imageMessage` directly to My Status |
+| D | Download the clip, then upload the file in WhatsApp Desktop/Web Status with HD selected if offered | Download the bot JPEG, then upload the file in WhatsApp Desktop/Web Status with HD selected if offered |
+| E | Download the clip, then upload the file in WhatsApp Desktop/Web Status at default quality | Download the bot JPEG, then upload the file in WhatsApp Desktop/Web Status at default quality |
 
-- **A:** original video posted directly to Status
-- **B:** processed video posted directly to Status
-- **C:** processed video sent in a chat with HD selected, then the new message forwarded to My Status
-
-For photos, compare:
-
-- **A:** original photo posted directly to Status from the phone gallery
-- **B:** processed `photo_hd` JPEG saved to gallery and posted to Status
-- **C:** processed `photo_hd` JPEG delivered by the bot as an `imageMessage` in chat, then forwarded directly to My Status without saving to the gallery first
-
-Path C is an experiment based on StatusDrop's manual notes, not a guaranteed workflow. Do not add it to user instructions unless testing reproduces a meaningful benefit.
+Record an HD variant as unavailable if the client offers no HD control. The Desktop/Web HD paths remain unverified. [WhatsApp Web Status help](https://faq.whatsapp.com/643144237275579/?cms_platform=web&helpref=hc_fnav)
 
 Evaluate visible detail, text edges, motion, banding, color shifts, audio sync, rejected uploads, output duration, and delivered file size when measurable. A local VMAF/SSIM score does not prove what WhatsApp delivered to viewers.
+
+Choose the profile and path with clearly better text edges and motion. If the comparison shows no meaningful difference, keep `hd29` as the sole default and record “no benefit observed.”
 
 ## Reference
 

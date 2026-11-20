@@ -92,7 +92,7 @@ fn seed_ready(api: &Shared, id: &str) -> String {
 #[tokio::test]
 async fn all_internal_routes_require_bearer_and_validate_artifact_paths() {
     let root = tempfile::tempdir().unwrap();
-    let app = router(Api::open(root.path(), TOKEN).unwrap());
+    let app = router(Api::open(root.path(), TOKEN, VideoProfile::Hd29).unwrap());
     let prefix = "/internal/v1/jobs";
     for (method, path) in [
         ("POST", prefix.to_owned()),
@@ -127,7 +127,7 @@ async fn all_internal_routes_require_bearer_and_validate_artifact_paths() {
 #[tokio::test]
 async fn upload_checks_length_digest_name_and_recovers_disconnected_body() {
     let root = tempfile::tempdir().unwrap();
-    let api = Api::open(root.path(), TOKEN).unwrap();
+    let api = Api::open(root.path(), TOKEN, VideoProfile::Hd29).unwrap();
     let app = router(api.clone());
     let digest = hex_digest(&Sha256::digest(b"abc"));
     assert_eq!(
@@ -186,9 +186,9 @@ async fn upload_checks_length_digest_name_and_recovers_disconnected_body() {
 #[tokio::test]
 async fn ordered_delivery_is_idempotent_across_restart() {
     let root = tempfile::tempdir().unwrap();
-    let api = Api::open(root.path(), TOKEN).unwrap();
+    let api = Api::open(root.path(), TOKEN, VideoProfile::Hd29).unwrap();
     assert!(
-        Api::open(root.path(), TOKEN).is_err(),
+        Api::open(root.path(), TOKEN, VideoProfile::Hd29).is_err(),
         "instance lock should reject two workers"
     );
     let id = seed_ready(&api, MESSAGE);
@@ -237,7 +237,7 @@ async fn ordered_delivery_is_idempotent_across_restart() {
     drop(app);
     drop(api);
 
-    let api = Api::open(root.path(), TOKEN).unwrap();
+    let api = Api::open(root.path(), TOKEN, VideoProfile::Hd29).unwrap();
     let app = router(api.clone());
     assert_eq!(
         read_json(delivery_action(&app, &id, 0, "ack").await).await["next_index"],
@@ -281,7 +281,7 @@ async fn ordered_delivery_is_idempotent_across_restart() {
 #[tokio::test]
 async fn reconciliation_and_retention_remove_abandoned_media() {
     let root = tempfile::tempdir().unwrap();
-    let api = Api::open(root.path(), TOKEN).unwrap();
+    let api = Api::open(root.path(), TOKEN, VideoProfile::Hd29).unwrap();
     let id = seed_ready(&api, MESSAGE);
     let app = router(api.clone());
     assert_eq!(
@@ -291,7 +291,7 @@ async fn reconciliation_and_retention_remove_abandoned_media() {
     fs::write(api.work.join("leftover"), b"media").unwrap();
     drop(app);
     drop(api);
-    let api = Api::open(root.path(), TOKEN).unwrap();
+    let api = Api::open(root.path(), TOKEN, VideoProfile::Hd29).unwrap();
     assert_eq!(
         api.get(&id).unwrap().error.as_deref(),
         Some("delivery_uncertain")
@@ -336,7 +336,7 @@ async fn reconciliation_and_retention_remove_abandoned_media() {
 async fn restart_clears_interrupted_uploads_and_fails_interrupted_encodes() {
     for processing in [false, true] {
         let root = tempfile::tempdir().unwrap();
-        let api = Api::open(root.path(), TOKEN).unwrap();
+        let api = Api::open(root.path(), TOKEN, VideoProfile::Hd29).unwrap();
         let hash = message_hash(MESSAGE).unwrap();
         let Reservation::New(id) = api.store.lock().unwrap().reserve(&hash).unwrap() else {
             panic!("job should be new");
@@ -348,7 +348,7 @@ async fn restart_clears_interrupted_uploads_and_fails_interrupted_encodes() {
         private_dir(&api.media.join(&id)).unwrap();
         drop(api);
 
-        let api = Api::open(root.path(), TOKEN).unwrap();
+        let api = Api::open(root.path(), TOKEN, VideoProfile::Hd29).unwrap();
         assert!(api.store.lock().unwrap().active().unwrap().is_none());
         assert_eq!(fs::read_dir(&api.work).unwrap().count(), 0);
         assert_eq!(fs::read_dir(&api.media).unwrap().count(), 0);
@@ -367,7 +367,7 @@ async fn restart_clears_interrupted_uploads_and_fails_interrupted_encodes() {
 #[tokio::test]
 async fn retention_sweep_revokes_delivery_while_a_reader_is_open() {
     let root = tempfile::tempdir().unwrap();
-    let api = Api::open(root.path(), TOKEN).unwrap();
+    let api = Api::open(root.path(), TOKEN, VideoProfile::Hd29).unwrap();
     let id = seed_ready(&api, MESSAGE);
     let app = router(api.clone());
     let path = format!("/internal/v1/jobs/{id}/artifacts/0");
@@ -419,7 +419,7 @@ async fn streams_a_generated_clip_through_the_real_worker() {
             .success()
     );
     let root = tempfile::tempdir().unwrap();
-    let api = Api::open(root.path(), TOKEN).unwrap();
+    let api = Api::open(root.path(), TOKEN, VideoProfile::Hd29).unwrap();
     let app = router(api.clone());
     let data = fs::read(&source).unwrap();
     let digest = hex_digest(&Sha256::digest(&data));
@@ -496,7 +496,7 @@ async fn streams_a_generated_photo_with_metadata_and_cleans_thumbnail() {
             .success()
     );
     let root = tempfile::tempdir().unwrap();
-    let api = Api::open(root.path(), TOKEN).unwrap();
+    let api = Api::open(root.path(), TOKEN, VideoProfile::Hd29).unwrap();
     let app = router(api.clone());
     let data = fs::read(&source).unwrap();
     let digest = hex_digest(&Sha256::digest(&data));
@@ -590,7 +590,7 @@ async fn migrates_existing_jobs_table_without_kind_or_artifact_meta() {
         )
         .unwrap();
     }
-    let api = Api::open(root.path(), TOKEN).unwrap();
+    let api = Api::open(root.path(), TOKEN, VideoProfile::Hd29).unwrap();
     let migrated = api.get("00000000-0000-4000-8000-000000000001").unwrap();
     assert_eq!(migrated.kind, "video");
     assert!(migrated.artifacts.is_empty());

@@ -30,7 +30,7 @@ use subtle::ConstantTimeEq;
 use tokio::io::AsyncWriteExt;
 use tokio_util::{io::ReaderStream, sync::CancellationToken, task::TaskTracker};
 use uuid::Uuid;
-use vidora::{MAX_INPUT, MediaKind, Processor, Tools};
+use vidora::{MAX_INPUT, MediaKind, Processor, Tools, VideoProfile};
 
 const UPLOAD_TIMEOUT: Duration = Duration::from_secs(90);
 const ARTIFACT_TIMEOUT: Duration = Duration::from_secs(45);
@@ -40,6 +40,7 @@ struct Api {
     store: Mutex<Store>,
     work: PathBuf,
     media: PathBuf,
+    video_profile: VideoProfile,
     token: sha2::digest::Output<Sha256>,
     stop: CancellationToken,
     tasks: TaskTracker,
@@ -74,7 +75,11 @@ fn missing() -> ApiError {
 }
 
 impl Api {
-    fn open(root: &Path, token: &str) -> Result<Shared, Box<dyn std::error::Error>> {
+    fn open(
+        root: &Path,
+        token: &str,
+        video_profile: VideoProfile,
+    ) -> Result<Shared, Box<dyn std::error::Error>> {
         if token.len() < 32 || !token.bytes().all(|byte| byte.is_ascii_graphic()) {
             return Err("invalid token".into());
         }
@@ -103,6 +108,7 @@ impl Api {
             store: Mutex::new(store),
             work,
             media,
+            video_profile,
             token: Sha256::digest(token),
             stop: CancellationToken::new(),
             tasks: TaskTracker::new(),
@@ -402,7 +408,9 @@ async fn process(
     bytes: u64,
 ) -> Result<(), &'static str> {
     let tools = Tools::from_path().map_err(|_| "media_tools_unavailable")?;
-    let mut processor = Processor::new(tools, &api.work).map_err(|_| "storage_error")?;
+    let mut processor = Processor::new(tools, &api.work)
+        .map_err(|_| "storage_error")?
+        .with_video_profile(api.video_profile);
     let job = processor.process(file, Some(bytes)).await;
     source.close().map_err(|_| "storage_error")?;
     let job = job.map_err(|record| {
@@ -632,7 +640,7 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
     }
     let ip =
         env::var("VIDORA_BIND_IP").map_or(Ok(IpAddr::V4(Ipv4Addr::LOCALHOST)), |ip| ip.parse())?;
-    let api = Api::open(&root, &token)?;
+    let api = Api::open(&root, &token, VideoProfile::from_env()?)?;
     Tools::from_path()?.check(&api.work).await?;
     let listener = tokio::net::TcpListener::bind(SocketAddr::new(ip, PORT)).await?;
     let scheduler = api.clone();

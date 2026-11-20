@@ -2,7 +2,7 @@ use std::{path::Path, time::Duration};
 
 use serde::{Deserialize, Serialize};
 
-use crate::{Error, MAX_PHOTO_INPUT, PhotoInput, Tools, VideoInput, tool};
+use crate::{Error, MAX_PHOTO_INPUT, PhotoInput, Tools, VideoInput, VideoProfile, tool};
 
 const VIDEO_FORMATS: &str = "mov,mp4,m4a,3gp,3g2,mj2,matroska,webm,avi,mpegts";
 const ALL_INPUT_FORMATS: &str = "mov,mp4,m4a,3gp,3g2,mj2,matroska,webm,avi,mpegts,jpeg_pipe,png_pipe,webp_pipe,bmp_pipe,tiff_pipe";
@@ -319,7 +319,11 @@ impl Probe {
         video.ok_or(Error::InvalidMedia)
     }
 
-    pub(crate) fn classify(&self, bytes: u64) -> Result<ClassifiedInput, Error> {
+    pub(crate) fn classify(
+        &self,
+        bytes: u64,
+        profile: VideoProfile,
+    ) -> Result<ClassifiedInput, Error> {
         if self.is_image_pipe() {
             if bytes > MAX_PHOTO_INPUT {
                 return Err(Error::InputSize);
@@ -355,7 +359,8 @@ impl Probe {
             return self.build_photo_input(bytes, stream, codec);
         }
 
-        self.input(bytes).map(ClassifiedInput::Video)
+        self.input(bytes, profile.canvas())
+            .map(ClassifiedInput::Video)
     }
 
     fn build_photo_input(
@@ -379,7 +384,11 @@ impl Probe {
         }))
     }
 
-    pub(crate) fn input(&self, bytes: u64) -> Result<VideoInput, Error> {
+    fn input(
+        &self,
+        bytes: u64,
+        (canvas_width, canvas_height): (u32, u32),
+    ) -> Result<VideoInput, Error> {
         let duration = seconds(self.format.duration.as_deref().ok_or(Error::InvalidMedia)?)?;
         if duration > MAX_SECONDS {
             return Err(Error::Duration);
@@ -407,13 +416,14 @@ impl Probe {
             video_codec: video.codec_name.clone().ok_or(Error::InvalidMedia)?,
             audio_codec: audio.and_then(|stream| stream.codec_name.clone()),
             hdr_transfer,
-            enlarged: width < 1080 && height < 1920,
+            enlarged: width < canvas_width && height < canvas_height,
             video: info,
         })
     }
 
     pub(crate) fn validate_clip(
         &self,
+        (width, height): (u32, u32),
         expected_audio: bool,
         tone_mapped: bool,
     ) -> Result<(f64, f64, Video), Error> {
@@ -446,7 +456,7 @@ impl Probe {
                 .sample_aspect_ratio
                 .as_deref()
                 .is_some_and(|ratio| ratio != "1:1")
-            || (info.width, info.height, info.rotation) != (1080, 1920, 0)
+            || (info.width, info.height, info.rotation) != (width, height, 0)
             || info.fps > 30.1
             || audio.is_some() != expected_audio
             || audio.is_some_and(|stream| {
@@ -705,10 +715,11 @@ pub(crate) async fn decode_photo(
     Ok(())
 }
 
-pub(crate) fn encode_args(input: &VideoInput, retry: bool) -> Vec<String> {
+pub(crate) fn encode_args(input: &VideoInput, profile: VideoProfile, retry: bool) -> Vec<String> {
     let mut command = ffmpeg_video_input("source");
-    let mut filters = String::from(
-        "scale=1080:1920:force_original_aspect_ratio=decrease:force_divisible_by=2:reset_sar=1",
+    let (width, height) = profile.canvas();
+    let mut filters = format!(
+        "scale={width}:{height}:force_original_aspect_ratio=decrease:force_divisible_by=2:reset_sar=1",
     );
     if let Some(transfer) = input.hdr_transfer {
         filters.push_str(":in_primaries=bt2020:in_color_matrix=bt2020nc:in_transfer=");
@@ -717,14 +728,18 @@ pub(crate) fn encode_args(input: &VideoInput, retry: bool) -> Vec<String> {
             ":out_primaries=bt709:out_color_matrix=bt709:out_transfer=bt709:out_range=tv:intent=perceptual,format=yuv420p,sidedata=mode=delete",
         );
     }
-    filters.push_str(",pad=1080:1920:(ow-iw)/2:(oh-ih)/2");
+    filters.push_str(&format!(",pad={width}:{height}:(ow-iw)/2:(oh-ih)/2"));
     if input.video.fps.max(input.video.nominal_fps) > CAP_FPS + 0.001 {
         filters.push_str(",fps=30000/1001");
     }
     let (crf, maxrate, bufsize) = if retry {
         ("27", "3000k", "4500k")
     } else {
-        ("23", "3800k", "5700k")
+        let crf = match profile {
+            VideoProfile::Hd29 => "23",
+            VideoProfile::Status720 => "20",
+        };
+        (crf, "3800k", "5700k")
     };
     command.extend(args(&[
         "-map_metadata",
@@ -913,6 +928,54 @@ mod tests {
     use serde_json::json;
 
     #[test]
+    fn selects_video_profile_and_rejects_unknown_names() {
+        assert_eq!(VideoProfile::default(), VideoProfile::Hd29);
+        assert_eq!("hd29".parse(), Ok(VideoProfile::Hd29));
+        assert_eq!("status720".parse(), Ok(VideoProfile::Status720));
+        assert_eq!("720p".parse::<VideoProfile>(), Err("invalid_video_profile"));
+        assert!("".parse::<VideoProfile>().is_err());
+    }
+
+    #[test]
+    fn builds_profile_specific_video_arguments() {
+        let probe: Probe = serde_json::from_value(json!({
+            "format": {"format_name": "mov,mp4", "duration": "1"},
+            "streams": [{
+                "codec_type": "video", "codec_name": "h264", "width": 720, "height": 1280,
+                "avg_frame_rate": "60/1", "duration": "1", "disposition": {"attached_pic": 0}
+            }]
+        }))
+        .unwrap();
+        for (profile, canvas, crf, enlarged) in [
+            (VideoProfile::Hd29, "1080:1920", "23", true),
+            (VideoProfile::Status720, "720:1280", "20", false),
+        ] {
+            let ClassifiedInput::Video(input) = probe.classify(1000, profile).unwrap() else {
+                panic!("expected video");
+            };
+            assert_eq!(input.enlarged, enlarged);
+            for (retry, crf, rate, buffer) in [
+                (false, crf, "3800k", "5700k"),
+                (true, "27", "3000k", "4500k"),
+            ] {
+                let args = encode_args(&input, profile, retry);
+                let value =
+                    |key| args[args.iter().position(|arg| arg == key).unwrap() + 1].as_str();
+                assert_eq!(
+                    value("-vf"),
+                    format!(
+                        "scale={canvas}:force_original_aspect_ratio=decrease:force_divisible_by=2:reset_sar=1,pad={canvas}:(ow-iw)/2:(oh-ih)/2,fps=30000/1001"
+                    )
+                );
+                assert_eq!(value("-crf"), crf);
+                assert_eq!(value("-maxrate"), rate);
+                assert_eq!(value("-bufsize"), buffer);
+                assert_eq!(value("-preset"), "medium");
+            }
+        }
+    }
+
+    #[test]
     fn validates_square_pixels_with_or_without_an_explicit_ratio() {
         let mut probe: Probe = serde_json::from_value(json!({
             "format": {"format_name": "mov,mp4", "duration": "1"},
@@ -923,12 +986,25 @@ mod tests {
             }]
         }))
         .unwrap();
-        assert!(probe.validate_clip(false, false).is_ok());
+        let hd29 = VideoProfile::Hd29.canvas();
+        let status720 = VideoProfile::Status720.canvas();
+        assert!(probe.validate_clip(hd29, false, false).is_ok());
+        assert_eq!(
+            probe.validate_clip(status720, false, false).unwrap_err(),
+            Error::InvalidMedia
+        );
         probe.streams[0].sample_aspect_ratio = Some("1:1".into());
-        assert!(probe.validate_clip(false, false).is_ok());
+        assert!(probe.validate_clip(hd29, false, false).is_ok());
+        probe.streams[0].width = Some(status720.0);
+        probe.streams[0].height = Some(status720.1);
+        assert!(probe.validate_clip(status720, false, false).is_ok());
+        assert_eq!(
+            probe.validate_clip(hd29, false, false).unwrap_err(),
+            Error::InvalidMedia
+        );
         probe.streams[0].sample_aspect_ratio = Some("4:3".into());
         assert_eq!(
-            probe.validate_clip(false, false).unwrap_err(),
+            probe.validate_clip(status720, false, false).unwrap_err(),
             Error::InvalidMedia
         );
     }
@@ -974,7 +1050,9 @@ mod tests {
             ]
         }))
         .unwrap();
-        let ClassifiedInput::Photo(photo) = sdr_heic.classify(1_000_000).unwrap() else {
+        let ClassifiedInput::Photo(photo) =
+            sdr_heic.classify(1_000_000, VideoProfile::Hd29).unwrap()
+        else {
             panic!("expected HEIC photo");
         };
         assert_eq!(photo.codec, "hevc");
@@ -991,7 +1069,8 @@ mod tests {
             }]
         }))
         .unwrap();
-        let ClassifiedInput::Photo(hdr) = hdr_heic.classify(1_000_000).unwrap() else {
+        let ClassifiedInput::Photo(hdr) = hdr_heic.classify(1_000_000, VideoProfile::Hd29).unwrap()
+        else {
             panic!("expected HDR HEIC photo");
         };
         assert_eq!(hdr.hdr_transfer, Some("arib-std-b67"));
@@ -1007,7 +1086,7 @@ mod tests {
         }))
         .unwrap();
         assert_eq!(
-            bad_hdr_heic.classify(1_000_000).err(),
+            bad_hdr_heic.classify(1_000_000, VideoProfile::Hd29).err(),
             Some(Error::UnsupportedHdr)
         );
     }

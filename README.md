@@ -14,7 +14,9 @@ Vidora prepares short MP4 clips and HD JPEG photos for WhatsApp Status. Run the 
 - **Photos (`photo_hd`):** Accepts a local JPEG, PNG, WebP, BMP, TIFF, or single-frame HEIC/AVIF photo up to 50 MiB (at most 12,288 px per edge and 52 MP). Applies EXIF/display rotation into pixels, flattens alpha channels onto white, tone-maps supported BT.2020 HLG/PQ photos to SDR, downscales only if longer than 3840 px while preserving aspect ratio (never upscales, crops, or pads), strips metadata, and exports a `yuvj420p` JPEG capped at 4,900,000 bytes.
 - Removes working media after processing and exports validated outputs to a private directory under the destination you choose.
 
-Vidora is a clean-room project. Both encoding profiles (`hd29` and `photo_hd`) are candidates for testing, and WhatsApp playback/image quality still needs validation on real devices. See the [encoding profile and test plan](docs/ENCODING.md).
+Vidora is a clean-room project. Its encoding profiles are candidates for testing, and WhatsApp playback and image quality still need validation on real devices. See the [encoding profiles and test plan](docs/ENCODING.md).
+
+Set `VIDORA_VIDEO_PROFILE=status720` in the CLI environment or the Compose `.env` to try the experimental 720 × 1280 profile. The default is `hd29`.
 
 ## Run the local processor
 

@@ -50,9 +50,9 @@ Include at least:
 
 | Fixture | Purpose |
 | --- | --- |
-| 1080×1920 SDR, 30 fps, stereo | Golden path |
-| 3840×2160 landscape, 60 fps | Scaling, padding, frame-rate cap |
-| Low-resolution portrait | Scale/pad and enlargement reporting |
+| 1080×1920 SDR, 30 fps, with audio | Golden path through both `hd29` and `status720`. Check the selected canvas, H.264 High / 4.0, `yuv420p`, AAC, duration, and byte cap. |
+| 3840×2160 landscape, 60 fps | Scaling, padding, and frame-rate cap with both video profiles |
+| Low-resolution portrait and 720×1280 portrait | Scale/pad and profile-specific enlargement reporting |
 | Rotated-phone video | Rotation metadata handling |
 | Variable-frame-rate source | Timestamp and sync handling |
 | Silent video | Optional audio mapping |
@@ -102,8 +102,8 @@ Only with explicit approval and a dedicated secondary number:
 2. Send each representative video fixture as a document, and each photo fixture both as a document and as a direct HD image.
 3. Record acknowledgment, processing time, returned parts/image dimensions and byte size, and failures.
 4. Verify output metadata independently with ffprobe.
-5. Run A/B/C posting paths from `ENCODING.md` for both videos and photos using the same source and WhatsApp settings.
-6. Record device model, OS, WhatsApp version, media upload quality, date, and observed result.
+5. Run A–E posting paths from `ENCODING.md` using the same source, account, and WhatsApp settings. Compare both video profiles. Include WhatsApp Desktop/Web Status at default quality and with HD selected where available. Record unavailable HD options.
+6. Record device model, OS, mobile WhatsApp version, desktop app version or Web client version, media upload quality, date, source and output ffprobe metadata, and observed text-edge and motion quality.
 7. Test WhatsApp reconnection and VPS restart without duplicate delivery.
 8. Verify input/output deletion and inspect logs for personal data or secrets.
 

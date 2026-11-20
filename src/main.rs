@@ -1,7 +1,7 @@
 use std::{path::PathBuf, process::ExitCode};
 
 use tokio::fs::File;
-use vidora::{Processor, Tools};
+use vidora::{Processor, Tools, VideoProfile};
 
 #[tokio::main(flavor = "current_thread")]
 async fn main() -> ExitCode {
@@ -24,6 +24,7 @@ async fn main() -> ExitCode {
 }
 
 async fn convert(input: PathBuf, destination: PathBuf) -> Result<(), String> {
+    let profile = VideoProfile::from_env()?;
     let metadata = tokio::fs::metadata(&input)
         .await
         .map_err(|_| "input_unavailable")?;
@@ -32,8 +33,9 @@ async fn convert(input: PathBuf, destination: PathBuf) -> Result<(), String> {
     }
     let file = File::open(input).await.map_err(|_| "input_unavailable")?;
     let tools = Tools::from_path().map_err(|_| "media_tools_unavailable")?;
-    let mut processor =
-        Processor::new(tools, &std::env::temp_dir()).map_err(|_| "work_directory_unavailable")?;
+    let mut processor = Processor::new(tools, &std::env::temp_dir())
+        .map_err(|_| "work_directory_unavailable")?
+        .with_video_profile(profile);
     let job = processor
         .process(file, Some(metadata.len()))
         .await
