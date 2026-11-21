@@ -1,4 +1,5 @@
-import { chmodSync, lstatSync, mkdirSync } from 'node:fs'
+import { createCipheriv, createDecipheriv, randomBytes } from 'node:crypto'
+import { chmodSync, lstatSync, mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { DatabaseSync } from 'node:sqlite'
 import { BufferJSON, initAuthCreds, proto } from '@whiskeysockets/baileys'
@@ -36,7 +37,33 @@ export function openAuth(directory) {
       const { pairingCode, ...persistent } = value
       put('creds', '', persistent)
     }
+    const ownerKey = join(directory, 'owner.key')
     return {
+      owner() {
+        const stored = get('admin', 'owner')
+        if (!stored) return null
+        const decode = (part) => Buffer.from(part, 'base64')
+        const cipher = createDecipheriv('aes-256-gcm', readFileSync(ownerKey), decode(stored.iv))
+        cipher.setAuthTag(decode(stored.tag))
+        return Buffer.concat([cipher.update(decode(stored.value)), cipher.final()]).toString()
+      },
+      saveOwner(owner) {
+        let key
+        try {
+          key = readFileSync(ownerKey)
+        } catch (error) {
+          if (error.code !== 'ENOENT') throw error
+          key = randomBytes(32)
+          writeFileSync(ownerKey + '.tmp', key, { mode: 0o600, flush: true })
+          renameSync(ownerKey + '.tmp', ownerKey)
+        }
+        const iv = randomBytes(12)
+        const cipher = createCipheriv('aes-256-gcm', key, iv)
+        const value = Buffer.concat([cipher.update(owner, 'utf8'), cipher.final()])
+        put('admin', 'owner', {
+          iv: iv.toString('base64'), tag: cipher.getAuthTag().toString('base64'), value: value.toString('base64'),
+        })
+      },
       state: {
         creds,
         keys: {
@@ -90,7 +117,7 @@ export function openAuth(directory) {
             if (creds.registered || !pending.registered) throw new Error('invalid pairing state')
             db.exec('BEGIN')
             try {
-              db.exec('DELETE FROM entries')
+              db.exec("DELETE FROM entries WHERE category <> 'admin'")
               save(pending)
               for (const [category, values] of keys) {
                 for (const [id, value] of values) put(category, id, value)
@@ -107,7 +134,7 @@ export function openAuth(directory) {
           discard() {
             keys.clear()
             delete pending.pairingCode
-            if (!creds.registered) db.exec('DELETE FROM entries')
+            if (!creds.registered) db.exec("DELETE FROM entries WHERE category <> 'admin'")
           },
         }
       },

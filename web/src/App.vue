@@ -3,6 +3,10 @@ import { computed, nextTick, onMounted, onUnmounted, ref } from 'vue'
 
 const pairErrors = {
   invalid_number: 'Enter a valid dedicated secondary number.',
+  invalid_owner_number: 'Enter the owner number in international format.',
+  owner_is_bot: 'Use a different number for the owner and the bot.',
+  owner_required: 'Set the owner number before pairing.',
+  owner_already_configured: 'The owner number is already configured.',
   number_mismatch: 'Use the configured bot number.',
   already_paired: 'The bot is already paired.',
   busy: 'A pairing attempt is already in progress.',
@@ -27,6 +31,7 @@ const jobErrors = {
 const csrf = ref('')
 const tokenInput = ref('')
 const number = ref('')
+const ownerNumber = ref('')
 const loginError = ref('')
 const actionError = ref('')
 const action = ref(false)
@@ -84,6 +89,7 @@ function reset() {
   state.value = null
   deadline.value = 0
   number.value = ''
+  ownerNumber.value = ''
   actionError.value = ''
 }
 function refresh() {
@@ -140,9 +146,12 @@ async function mutate(path, method, payload) {
       return
     }
     if (result.status === 202) number.value = ''
-    if (result.status === 204) deadline.value = 0
+    if (result.status === 204) {
+      deadline.value = 0
+      if (path === '/api/owner') ownerNumber.value = ''
+    }
     if (result.status >= 400) {
-      if (result.status === 401 && path === '/api/pair' && result.data?.error === 'unauthorized') {
+      if (result.status === 401 && result.data?.error === 'unauthorized') {
         const session = await request('/api/session')
         if (session.status === 401) return reset()
       }
@@ -217,7 +226,16 @@ onUnmounted(() => {
 
     <div v-else class="grid gap-5">
       <p v-if="actionError" class="error" role="alert">{{ actionError }}</p>
-      <section v-if="connection && !connection.paired" class="panel" aria-labelledby="pair">
+      <section v-if="connection && !connection.owner_configured" class="panel" aria-labelledby="owner">
+        <h2 id="owner">Set the owner number</h2>
+        <p>This is the WhatsApp account that can send jobs to Vidora. If you already use this bot, enter your existing owner number.</p>
+        <form class="grid gap-3" @submit.prevent="mutate('/api/owner', 'POST', { number: ownerNumber })">
+          <label for="owner-number">Owner WhatsApp number in international format</label>
+          <input id="owner-number" v-model.trim="ownerNumber" type="tel" autocomplete="off" maxlength="16" required>
+          <button class="primary" type="submit" :disabled="action">Save owner number</button>
+        </form>
+      </section>
+      <section v-else-if="connection && !connection.paired" class="panel" aria-labelledby="pair">
         <h2 id="pair">Link the bot phone</h2>
         <p>Use a dedicated secondary number. On that phone, open WhatsApp, go to Linked devices, choose Link a device, then Link with phone number instead.</p>
         <form v-if="!counting" class="grid gap-3" @submit.prevent="pair">

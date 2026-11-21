@@ -7,7 +7,8 @@ const jobErrors = ['unsupported_hdr', 'input_size', 'processing_failed', 'delive
   'delivery_uncertain', 'artifact_missing', 'expired', 'shutdown', 'processing_interrupted']
 const pairingStates = ['idle', 'requesting', 'code', 'paired', 'failed', 'expired', 'cancelled', 'wrong_account']
 const pairingErrors = ['invalid_number', 'number_mismatch', 'already_paired', 'busy', 'wrong_account',
-  'pairing_request_failed', 'pairing_timed_out', 'unauthorized', 'unreachable', 'invalid_request']
+  'pairing_request_failed', 'pairing_timed_out', 'unauthorized', 'unreachable', 'invalid_request',
+  'invalid_owner_number', 'owner_is_bot', 'owner_required', 'owner_already_configured']
 const mime = { video: 'video/mp4', photo: 'image/jpeg' }
 const byteCap = { video: 15_800_000, photo: 4_900_000 }
 
@@ -113,13 +114,14 @@ export function createUpstream(config, fetcher = fetch) {
         job: job.value ?? null, job_error: job.status === 'fulfilled' ? null : 'unavailable',
       }
     },
-    async pair(method, body) {
+    async setup(owner, method, body) {
       try {
-        const res = await get(config.control, '/control/pair', {
+        const res = await get(config.control, owner ? '/control/owner' : '/control/pair', {
           method,
           ...(method === 'POST' ? { headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) } : {}),
         })
-        if ((method === 'POST' && res.status === 202) || (method === 'DELETE' && res.status === 204)) {
+        const expected = owner || method === 'DELETE' ? 204 : 202
+        if (res.status === expected) {
           await res.body?.cancel()
           return [res.status, res.status === 202 ? { accepted: true } : undefined]
         }

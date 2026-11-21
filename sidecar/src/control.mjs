@@ -33,7 +33,9 @@ export function createControl({ token, pairing }) {
     const auth = req.headersDistinct.authorization
     const match = auth?.length === 1 && /^Bearer ([!-~]+)$/.exec(auth[0])
     if (!match || !timingSafeEqual(hash(match[1]), expected)) return send(401, { error: 'unauthorized' })
-    const allowed = { '/control/status': ['GET'], '/control/pair': ['POST', 'DELETE'] }[req.url]
+    const allowed = {
+      '/control/status': ['GET'], '/control/pair': ['POST', 'DELETE'], '/control/owner': ['POST'],
+    }[req.url]
     if (!Array.isArray(allowed)) return send(404, { error: 'not_found' })
     if (!allowed.includes(req.method)) {
       res.setHeader('Allow', allowed.join(', '))
@@ -82,6 +84,14 @@ export function createControl({ token, pairing }) {
       || Object.keys(body).some((key) => key !== 'number')
       || (Object.hasOwn(body, 'number') && typeof body.number !== 'string')) {
       return send(400, { error: 'invalid_request' })
+    }
+    if (req.url === '/control/owner') {
+      try {
+        const error = pairing.configureOwner(body.number)
+        return error ? send(error === 'owner_already_configured' ? 409 : 400, { error }) : send(204)
+      } catch {
+        return send(503, { error: 'unavailable' })
+      }
     }
     const error = pairing.start(body.number)
     if (!error) return send(202, { accepted: true })

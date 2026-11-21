@@ -47,6 +47,7 @@ async function fixture(t, options = {}) {
     const result = options.fetcher?.(pathname, request)
     if (result !== undefined) return result
     if (pathname === '/control/status') return Response.json(state)
+    if (pathname === '/control/owner') return new Response(null, { status: 204 })
     if (pathname === '/control/pair') {
       return request.method === 'POST' ? Response.json({ accepted: true }, { status: 202 }) : new Response(null, { status: 204 })
     }
@@ -205,6 +206,27 @@ test('state whitelists job and connection output and degrades either upstream in
   assert.equal(degraded.job, null)
   assert.equal(degraded.job_error, 'unavailable')
   assert.equal(degraded.connection_reachable, true)
+})
+
+test('owner setup only forwards an authenticated, CSRF-protected number', async (t) => {
+  let submitted
+  const { call, calls, login } = await fixture(t, {
+    fetcher(path, request) {
+      if (path === '/control/owner') submitted = JSON.parse(request.body)
+    },
+  })
+  const body = { number: '+12025550101' }
+  assert.equal((await call('/api/owner', { method: 'POST', body })).status, 401)
+  const { headers } = await login()
+  assert.equal((await call('/api/owner', { method: 'POST', body, headers: { cookie: headers.cookie } })).status, 403)
+  assert.equal((await call('/api/owner', { method: 'POST', body: {}, headers })).status, 400)
+  assert.equal((await call('/api/owner', { headers })).status, 404)
+  assert.deepEqual(calls, [])
+  const response = await call('/api/owner', { method: 'POST', body, headers })
+  assert.equal(response.status, 204)
+  assert.equal(await response.text(), '')
+  assert.deepEqual(submitted, body)
+  assert.deepEqual(calls, [['/control/owner', 'POST']])
 })
 
 test('only current artifact GETs reach the bounded proxy', async (t) => {

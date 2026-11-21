@@ -25,7 +25,7 @@ The project does not guarantee that WhatsApp will skip recompression.
 ### Input and authorization
 
 - Accept one video document (up to 300 MiB) or one photo (as an image document or direct WhatsApp `imageMessage`, up to 50 MiB) per job.
-- Accept jobs only when the authenticated WhatsApp sender matches `OWNER_WHATSAPP_NUMBER`.
+- Accept jobs only when the authenticated WhatsApp sender matches the configured owner. Set the owner in the admin UI or supply `OWNER_WHATSAPP_NUMBER` for headless setup.
 - Reject group messages, broadcasts, unknown senders, forwarded commands, and unsolicited media from other accounts.
 - Deduplicate WhatsApp message IDs so retries do not create duplicate jobs or deliveries.
 - Allow one active job for the owner. Additional jobs receive a concise busy response.

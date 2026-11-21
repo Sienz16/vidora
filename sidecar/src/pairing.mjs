@@ -22,13 +22,25 @@ export function linkedBot(auth, owner, pinned) {
 }
 
 export function createPairing({
-  auth, owner, pinned, bot, stop, log, dial = connect, deadlineMs = 180_000,
+  auth, owner, pinned, stop, log, dial = connect, deadlineMs = 180_000,
 }) {
   let connected = false
   let current = null
   let pairing = { state: 'idle', code: null, error: null }
   let notifyPaired
   const paired = new Promise((resolve) => { notifyPaired = resolve })
+  let notifyOwner
+  const configured = new Promise((resolve) => { notifyOwner = resolve })
+  async function wait(promise) {
+    if (stop.aborted) return null
+    let listener
+    const stopped = new Promise((resolve) => { listener = addAbortListener(stop, () => resolve(null)) })
+    try {
+      return await Promise.race([promise, stopped])
+    } finally {
+      listener[Symbol.dispose]()
+    }
+  }
   const status = () => {
     const registered = Boolean(auth.state.creds.registered)
     const jid = registered ? linkedBot(auth, owner, pinned) : pinned
@@ -37,7 +49,7 @@ export function createPairing({
       paired: registered,
       connected,
       bot: jid ? `••••${jid.split('@')[0].slice(-4)}` : null,
-      owner_configured: true,
+      owner_configured: Boolean(owner),
       pairing: {
         ...pairing,
         code: seconds > 0 ? pairing.code : null,
@@ -64,7 +76,7 @@ export function createPairing({
       do {
         if (signal.aborted) break
         const result = await dial({
-          auth: staged, botJid: jid, bot, stop: signal, log, online() {},
+          auth: staged, botJid: jid, stop: signal, log, online() {},
           pairing(code) {
             if (signal.aborted || !/^[A-Z0-9]{8}$/.test(code)) return
             pairing = { state: 'code', code, error: null }
@@ -72,7 +84,6 @@ export function createPairing({
             onCode?.(code)
           },
         })
-        await bot.drained()
         reason = result.reason
         if (reason === restartRequired && !signal.aborted) {
           await delay(retry, undefined, { signal }).catch(() => {})
@@ -111,7 +122,26 @@ export function createPairing({
   return {
     status,
     online: (value) => { connected = value },
+    configureOwner(number) {
+      if (owner) return 'owner_already_configured'
+      let selected
+      try {
+        selected = phoneJid(number)
+      } catch {
+        return 'invalid_owner_number'
+      }
+      const bot = auth.state.creds.registered ? linkedBot(auth, null, pinned) : pinned
+      if (selected === bot) return 'owner_is_bot'
+      auth.saveOwner(selected)
+      owner = selected
+      notifyOwner(owner)
+      return null
+    },
+    async waitForOwner() {
+      return stop.aborted ? null : owner ?? await wait(configured)
+    },
     start(number, onCode) {
+      if (!owner) return 'owner_required'
       if (auth.state.creds.registered) return 'already_paired'
       if (current) return 'busy'
       let jid
@@ -120,7 +150,8 @@ export function createPairing({
       } catch {
         return 'invalid_number'
       }
-      if (!jid || jid === owner) return 'invalid_number'
+      if (!jid) return 'invalid_number'
+      if (jid === owner) return 'owner_is_bot'
       if (pinned && jid !== pinned) return 'number_mismatch'
       pairing = { state: 'requesting', code: null, error: null }
       log('pairing_started')
@@ -140,13 +171,7 @@ export function createPairing({
     },
     async waitForPair() {
       if (auth.state.creds.registered) return true
-      if (stop.aborted) return false
-      const listener = addAbortListener(stop, () => notifyPaired(false))
-      try {
-        return await paired
-      } finally {
-        listener[Symbol.dispose]()
-      }
+      return await wait(paired)
     },
     async drain() {
       return await current?.done

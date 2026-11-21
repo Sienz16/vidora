@@ -33,9 +33,11 @@ Test owner allowlisting, group rejection, unknown senders, unsupported messages,
 
 ## Local admin checks
 
+On a native development host, run `./scripts/start-local.sh` and check the dashboard and all three loopback listeners. For an isolated smoke test, use a fresh private directory via `VIDORA_LOCAL_DATA_DIR` and set `CI=1` to skip opening the browser. Verify that the launcher stops all listeners on Ctrl+C. Leave the sidecar unpaired during this check.
+
 Run `npm test --prefix sidecar`, `npm test --prefix web`, and `npm run build --prefix web` under Node.js 24. Use fake socket/control/API implementations and generated media. Automated tests must never link a real WhatsApp account or contain real numbers.
 
-Verify the private control listener, owner-number rejection, pinned and unpinned UI pairing, and redaction across success, expiry, cancellation, and wrong identity. Check that headless pairing and startup without control report `bot_number_required` for an empty number, and that configured base startup still reports `sidecar_pairing_required` if unpaired.
+Verify missing owner setup, owner persistence across restarts, rejection of owner overwrite and owner/bot matches, the private control listener, pinned and unpinned UI pairing, and redaction across success, expiry, cancellation, and wrong identity. Check that headless pairing and startup without control report `bot_number_required` for an empty number, and that configured base startup still reports `sidecar_pairing_required` if unpaired.
 
 With the UI overlay and fake upstreams, verify loopback publication and that the API and sidecar have no host ports. In the browser check unauthenticated rejection, failed-login throttling, the HttpOnly cookie, CSRF enforcement, and no third-party requests. Issue, cancel, and regenerate a fake pairing code, observe its countdown, and verify the code is absent from logs. Exercise job transitions and download the current artifact without acknowledging it. Confirm delivery and terminal routes are unavailable. Check keyboard navigation, mobile width, and that polling pauses while the tab is hidden.
 

@@ -24,8 +24,8 @@ async function fixture(t, options = {}) {
   const stop = new AbortController()
   const log = []
   const pairing = createPairing({
-    auth, owner, pinned: options.pinned ?? null, stop: stop.signal,
-    bot: { async drained() {} }, log: (event) => log.push(event), deadlineMs: options.deadlineMs,
+    auth, owner: options.owner === undefined ? owner : options.owner, pinned: options.pinned ?? null,
+    stop: stop.signal, log: (event) => log.push(event), deadlineMs: options.deadlineMs,
     dial: options.dial ?? (async ({ auth: staged, stop: signal, pairing: show }) => {
       staged.state.creds.pairingCode = fakeCode
       staged.save()
@@ -80,9 +80,11 @@ test('control requires a single exact bearer and returns bounded JSON only', asy
 
 test('unpinned pairing validates the number, issues one code, cancels and retries', async (t) => {
   const { call, status, pairing, log, directory } = await fixture(t)
-  for (const number of ['1234', '+01234567', '123 4567', 'abcdefghi', '1234567890123456', '+12025550101']) {
+  for (const number of ['1234', '+01234567', '123 4567', 'abcdefghi', '1234567890123456']) {
     assert.deepEqual((await call('POST', '/pair', { number })).slice(0, 2), [400, { error: 'invalid_number' }])
   }
+  assert.deepEqual((await call('POST', '/pair', { number: '+12025550101' })).slice(0, 2),
+    [400, { error: 'owner_is_bot' }])
   assert.equal((await call('POST', '/pair', { number: '+12025550102' }))[0], 202)
   assert.equal((await status()).pairing.code, fakeCode)
   const db = new DatabaseSync(join(directory, 'session.db'), { readOnly: true })
@@ -152,20 +154,61 @@ test('verified pairing saves the linked identity and keys without the code', asy
 test('wrong account discards only unregistered state and allows retry', async (t) => {
   let calls = 0
   const { auth, pairing, status, call } = await fixture(t, {
+    owner: null,
     dial: async ({ auth: staged, botJid }) => {
       staged.state.creds.registered = true
       staged.state.creds.me = { id: calls++ === 0 ? owner : botJid }
       return { reason: 'paired' }
     },
   })
+  assert.equal((await call('POST', '/owner', { number: '12025550101' }))[0], 204)
   await auth.state.keys.set({ session: { partial: 'old' } })
   assert.equal((await call('POST', '/pair', { number: '+12025550102' }))[0], 202)
   await pairing.drain()
   assert.equal((await status()).pairing.state, 'wrong_account')
   assert.equal(auth.state.creds.registered, false)
   assert.deepEqual(await auth.state.keys.get('session', ['partial']), { partial: null })
+  assert.equal(auth.owner(), owner)
   assert.equal((await call('POST', '/pair', { number: '+12025550102' }))[0], 202)
   assert.equal(await pairing.waitForPair(), true)
+  assert.equal(linkedBot(auth, owner, null), pinned)
+})
+
+test('owner setup blocks pairing until saved and never exposes the owner number', async (t) => {
+  const { call, status, auth, directory, pairing, log } = await fixture(t, { owner: null, pinned })
+  assert.equal((await status()).owner_configured, false)
+  assert.deepEqual((await call('POST', '/pair', {})).slice(0, 2), [400, { error: 'owner_required' }])
+  assert.equal((await call('POST', '/owner', { number: '12025550101' }, {}))[0], 401)
+  assert.deepEqual((await call('POST', '/owner', { number: 'invalid' })).slice(0, 2),
+    [400, { error: 'invalid_owner_number' }])
+  assert.deepEqual((await call('POST', '/owner', { number: '+12025550102' })).slice(0, 2),
+    [400, { error: 'owner_is_bot' }])
+  assert.equal((await call('POST', '/owner', { number: '+12025550101' }))[0], 204)
+  assert.equal(await pairing.waitForOwner(), owner)
+  assert.equal(auth.owner(), owner)
+  assert.equal((await status()).owner_configured, true)
+  assert.deepEqual((await call('POST', '/owner', { number: '12025550103' })).slice(0, 2),
+    [409, { error: 'owner_already_configured' }])
+  const db = new DatabaseSync(join(directory, 'session.db'), { readOnly: true })
+  try {
+    assert.doesNotMatch(JSON.stringify(db.prepare('SELECT value FROM entries').all()), /12025550101|@s\.whatsapp\.net/)
+  } finally { db.close() }
+  assert.ok(!JSON.stringify(await status()).includes('12025550101'))
+  assert.ok(!log.join(' ').includes('12025550101'))
+})
+
+test('owner can be configured for an existing link without pairing again', async (t) => {
+  const { call, auth, pairing, status } = await fixture(t, { owner: null })
+  auth.state.creds.me = { id: '12025550102:7@s.whatsapp.net' }
+  auth.state.creds.registered = true
+  auth.save()
+  const waiting = pairing.waitForOwner()
+  assert.deepEqual((await call('POST', '/owner', { number: '12025550102' })).slice(0, 2),
+    [400, { error: 'owner_is_bot' }])
+  assert.equal((await call('POST', '/owner', { number: '12025550101' }))[0], 204)
+  assert.equal(await waiting, owner)
+  assert.equal(await pairing.waitForPair(), true)
+  assert.equal((await status()).paired, true)
   assert.equal(linkedBot(auth, owner, null), pinned)
 })
 
@@ -192,6 +235,7 @@ test('startup modes enforce the headless pin and keep unpinned UI mode alive', a
   for (const [args, config, event] of [
     [[], {}, 'bot_number_required'],
     [['--pair'], {}, 'bot_number_required'],
+    [[], { BOT_WHATSAPP_NUMBER: '12025550102', OWNER_WHATSAPP_NUMBER: '' }, 'owner_number_required'],
     [[], { BOT_WHATSAPP_NUMBER: '12025550102' }, 'sidecar_pairing_required'],
   ]) {
     const child = start(args, config)
@@ -205,7 +249,9 @@ test('startup modes enforce the headless pin and keep unpinned UI mode alive', a
   await once(reserve, 'listening')
   const port = reserve.address().port
   await new Promise((resolve) => reserve.close(resolve))
-  const child = start([], { SIDECAR_CONTROL_TOKEN: controlToken, SIDECAR_CONTROL_PORT: String(port) })
+  const child = start([], {
+    OWNER_WHATSAPP_NUMBER: '', SIDECAR_CONTROL_TOKEN: controlToken, SIDECAR_CONTROL_PORT: String(port),
+  })
   t.after(() => { if (child.exitCode === null) child.kill() })
   const closed = once(child, 'close')
   let state
@@ -217,7 +263,15 @@ test('startup modes enforce the headless pin and keep unpinned UI mode alive', a
     await delay(40)
   }
   assert.equal(state?.paired, false)
+  assert.equal(state.owner_configured, false)
   assert.equal(state.bot, null)
+  const saved = await fetch(`http://127.0.0.1:${port}/control/owner`, {
+    method: 'POST', headers: { authorization: bearer, 'content-type': 'application/json' },
+    body: JSON.stringify({ number: '12025550101' }),
+  })
+  assert.equal(saved.status, 204)
   child.kill('SIGTERM')
   assert.deepEqual(await closed, [0, null])
+  const reopened = openAuth(directory)
+  try { assert.equal(reopened.owner(), owner) } finally { reopened.close() }
 })

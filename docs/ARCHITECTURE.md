@@ -74,10 +74,13 @@ Browser → 127.0.0.1 host port → web
 
 The optional Node.js 24 web service serves a local Vue build and holds both upstream bearer tokens server-side. The Rust API contract and database are unchanged. The browser receives an admin session cookie and a CSRF token. It can view the active/latest job and download its currently available artifact.
 
+The admin UI can set the owner once through the authenticated control endpoint. The sidecar stores that owner encrypted in the session volume and waits for an owner before starting the WhatsApp connection. Existing environment configuration remains supported. The dashboard receives only a boolean indicating whether the owner is configured.
+
 The sidecar enables the control server only with `SIDECAR_CONTROL_TOKEN`. It binds to the dedicated internal control interface in Compose and defaults to loopback outside the overlay. The Docker host is trusted and may reach bridge container IPs. The control server stays available through pairing and the normal connection loop.
 
 | Endpoint | Purpose |
 | --- | --- |
+| `POST /control/owner` | Set the owner once when no owner is configured |
 | `GET /control/status` | Read masked connection and transient pairing status |
 | `POST /control/pair` | Start one bounded pairing attempt |
 | `DELETE /control/pair` | Cancel the active attempt |
@@ -101,7 +104,7 @@ Exact field schemas may be implemented in code, but preserve these semantics:
 Requirements:
 
 - Every `/internal` route requires `Authorization: Bearer <INTERNAL_API_TOKEN>`.
-- The Rust service binds to the private Compose network only; published host ports are not required for MVP.
+- The Rust service binds to the private Compose network in Docker and to `127.0.0.1` when started by the native launcher.
 - Artifact indices and job IDs are validated server-side. Paths are resolved from server-owned records, never raw request strings.
 - Request bodies and downloads are streamed and bounded; buffering an entire 300 MiB video in memory is not acceptable.
 - Job creation returns 202 for a new upload, 200 for a duplicate, and 409 when another job is active. The display name is validated and discarded. SQLite retains a SHA-256 digest of the message ID for idempotency.

@@ -9,7 +9,7 @@ Self-hosting reduces dependence on third-party apps but does not prove the syste
 ## WhatsApp controls
 
 - Use a dedicated secondary bot number. Never use the owner's primary number for the bot session.
-- Allow only `OWNER_WHATSAPP_NUMBER`, compared against authenticated sender metadata.
+- Allow only the configured owner, compared against authenticated sender metadata. Owner setup in the UI requires an authenticated session, CSRF protection, and the sidecar bearer token.
 - Reject groups, broadcasts, unknown senders, and unexpected message types.
 - Do not auto-post Status updates, auto-forward media, or expose bot functionality to contacts.
 - Run exactly one Baileys sidecar using a given session. A second instance can disconnect or corrupt the session.
@@ -71,6 +71,7 @@ Self-hosting reduces dependence on third-party apps but does not prove the syste
 - Serve local assets under strict CSP without inline scripts, HTML injection, or third-party requests. Return fixed errors without stack traces, upstream bodies, paths, or secrets.
 - Bind the control listener to its internal bridge IP or local loopback. Keep the Docker host trusted because it may reach bridge addresses. No sidecar port is published.
 - Reject owner-number pairing. A configured bot number pins the expected identity. Headless mode and startup without control require a number and report `bot_number_required` if it is missing.
+- Store the UI-configured owner encrypted in the sidecar database. Keep the encryption key in the same private session volume and protect the whole volume and its backups. Return only an owner-configured flag. Reject conflicting environment configuration and prevent overwrite through the UI.
 - Keep pairing codes in memory only. Clear them at cancellation, deadline, or completion. Stage pairing credentials until the bot identity is verified, then persist the session without the pairing code. Keep codes, tokens, full numbers, JIDs, cookies, and bodies out of logs.
 
 ## Security acceptance gate

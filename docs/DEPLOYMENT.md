@@ -2,6 +2,8 @@
 
 Deployment requires explicit user approval after the implementation and security audits.
 
+For trusted local use, run `./scripts/start-local.sh` from the repository root. The launcher keeps its credentials, WhatsApp session, and API data under `data/local` by default and binds all three services to loopback. Use Docker on the deployment host for network and resource isolation.
+
 ## Starting capacity
 
 - Ubuntu LTS with Docker Engine 28+ and Docker Compose 2.33.1+
@@ -30,7 +32,7 @@ Use a protected deployment secret store or a `0600` `.env` file. Copy `.env.exam
 
 | Variable | Purpose |
 | --- | --- |
-| `OWNER_WHATSAPP_NUMBER` | Single owner allowed to submit jobs; store only in protected deployment configuration |
+| `OWNER_WHATSAPP_NUMBER` | Optional with the UI. Leave empty to set the owner in the dashboard. For fresh headless setup, supply the single owner allowed to submit jobs. |
 | `BOT_WHATSAPP_NUMBER` | Optional identity pin with UI control. Leave empty to enter the secondary number in the UI. Required for headless pairing and startup without control. |
 | `WEB_ADMIN_TOKEN` | Independent admin secret with at least 32 printable non-space ASCII characters |
 | `SIDECAR_CONTROL_TOKEN` | Independent web-to-sidecar bearer secret with at least 32 printable non-space ASCII characters |
@@ -65,16 +67,16 @@ On the approved host, run:
 docker compose -f compose.yaml -f compose.ui.yaml up -d --build
 ```
 
-Open `http://127.0.0.1:3000`, unlock with `WEB_ADMIN_TOKEN`, then enter the dedicated secondary bot number if it is unpinned. Complete pairing on that phone only after explicit approval. Run `docker compose -f compose.yaml -f compose.ui.yaml ps` and send `/help` from the owner phone when connected. The sidecar can be unhealthy while unpaired. Start without `up --wait` until pairing is complete.
+Open `http://127.0.0.1:3000`, unlock with `WEB_ADMIN_TOKEN`, then set the owner number if prompted and enter the dedicated secondary bot number if it is unpinned. If removing an existing owner setting from `.env`, enter the same owner in the UI. The UI saves the owner once in the sidecar volume. Complete pairing on that phone only after explicit approval. Run `docker compose -f compose.yaml -f compose.ui.yaml ps` and send `/help` from the owner phone when connected. The sidecar can be unhealthy while unpaired. Start without `up --wait` until pairing is complete.
 
 For remote access, use an SSH local forward such as `ssh -N -L 3000:127.0.0.1:3000 user@host`, or private Tailscale Serve forwarding to loopback. For HTTPS, set the public origin to the HTTPS origin and `WEB_COOKIE_SECURE=1`. Keep the host bind on `127.0.0.1`.
 
-If the UI shows “Sidecar unreachable,” inspect service status and fixed sidecar event names. Check matching control tokens, the control bridge configuration, and whether the session was invalidated. `bot_number_required` means the sidecar needs a configured bot number in that startup mode.
+If the UI shows “Sidecar unreachable,” inspect service status and fixed sidecar event names. Check matching control tokens, the control bridge configuration, and whether the session was invalidated. `bot_number_required` and `owner_number_required` identify missing numbers in headless startup.
 For a manual session reset, stop the sidecar, unlink the old session on the dedicated phone, and identify the exact Compose session volume. Back it up with encryption if needed, remove only that session volume after approval, then start one sidecar and pair again. Preserve the API media volume.
 
 ## Headless pairing fallback
 
-Set `BOT_WHATSAPP_NUMBER` and proceed only after explicit approval:
+Set `BOT_WHATSAPP_NUMBER` and provide `OWNER_WHATSAPP_NUMBER` if the owner was not saved through the UI. Proceed only after explicit approval:
 
 On the approved trial host, run these commands from the repository root using a private interactive terminal with recording disabled.
 
@@ -93,7 +95,7 @@ Do not run a second sidecar during linking, restart, rollback, or restore.
 
 ## Backup and restore
 
-- Stop both services for a filesystem-level backup. Use an approved encrypted backup destination for the sidecar session files and the API's `jobs.db` and any matching `jobs.db-wal` and `jobs.db-shm` files. Preserve directory ownership and mode.
+- Stop both services for a filesystem-level backup. Use an approved encrypted backup destination for the complete sidecar session directory (including `owner.key` when present) and the API's `jobs.db` and any matching `jobs.db-wal` and `jobs.db-shm` files. Preserve directory ownership and mode.
 - Do not back up temporary input/output media.
 - Stop the sidecar before restoring its session.
 - Restore into one instance only, then verify connection and message idempotency.

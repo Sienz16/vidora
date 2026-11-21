@@ -40,11 +40,11 @@ async function run() {
   }
   if (pairing && !process.stdout.isTTY) throw new Error('invalid invocation')
   const control = pairing ? null : controlConfig(process.env)
-  const owner = phoneJid(process.env.OWNER_WHATSAPP_NUMBER)
+  const envOwner = process.env.OWNER_WHATSAPP_NUMBER ? phoneJid(process.env.OWNER_WHATSAPP_NUMBER) : null
   const directory = process.env.BAILEYS_AUTH_DIR
   const token = process.env.INTERNAL_API_TOKEN
   const marker = process.env.VIDORA_READY_FILE
-  if (owner === pinned || !directory || !isAbsolute(directory)
+  if (!directory || !isAbsolute(directory)
     || !token || !/^[!-~]{32,}$/.test(token)
     || (marker && !isAbsolute(marker))) throw new Error('invalid configuration')
   const online = (connected) => {
@@ -61,11 +61,20 @@ async function run() {
   online(false)
   const api = createApi(process.env.RUST_API_URL, token)
   const auth = openAuth(directory)
-  const bot = createBot({ api, owner, stop: stopping.signal, log })
   const stop = stopping.signal
-  const service = createPairing({ auth, owner, pinned, bot, stop, log })
+  let service
   let server
   try {
+    const storedOwner = auth.owner()
+    let owner = storedOwner ?? envOwner
+    if ((storedOwner && envOwner && storedOwner !== envOwner) || (owner && owner === pinned)) {
+      throw new Error('owner configuration mismatch')
+    }
+    if (!control && !owner) {
+      log('owner_number_required')
+      return 1
+    }
+    service = createPairing({ auth, owner, pinned, stop, log })
     const { creds } = auth.state
     if (creds.registered) linkedBot(auth, owner, pinned)
     if (pairing) {
@@ -82,9 +91,12 @@ async function run() {
       server = createControl({ token: control.token, pairing: service })
       server.listen(control.port, control.host)
       await once(server, 'listening')
+      owner = await service.waitForOwner()
+      if (!owner) return 0
       if (!await service.waitForPair()) return 0
     }
     const botJid = linkedBot(auth, owner, pinned)
+    const bot = createBot({ api, owner, stop, log })
     let retry = 1_000
     while (!stop.aborted) {
       const { reason, opened } = await connect({
@@ -112,8 +124,8 @@ async function run() {
       server.closeAllConnections()
       await closed
     }
-    service.cancel()
-    await service.drain()
+    service?.cancel()
+    await service?.drain()
     auth.close()
   }
 }

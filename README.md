@@ -32,7 +32,25 @@ cargo run --locked -- ./sample.jpg ./output
 
 Replace `./sample.mp4` or `./sample.jpg` with your input video or photo. On success, the CLI prints a redacted JSON job record followed by the path to the exported outputs. The source file stays in place. Manage or delete the exported copies after use.
 
-## Run the bot
+## Start the server without Docker
+
+On macOS or Linux, put Node.js 24, npm, Cargo, FFmpeg 9 with `libx264`, and ffprobe on your PATH. Run this command from the repository root.
+
+```sh
+./scripts/start-local.sh
+```
+
+The launcher builds and starts all three services. It creates private credentials on first launch and opens the admin UI where a desktop browser is available. Local startup requires no `.env` file.
+
+1. Open [the local dashboard](http://127.0.0.1:3000) if it does not open automatically.
+2. Unlock with `WEB_ADMIN_TOKEN` from `data/local/credentials.json`.
+3. Set the owner number, then pair the dedicated secondary bot number when approved.
+
+Press **Ctrl+C** in the launch terminal to stop all three services. Credentials and the WhatsApp session are reused on restart.
+
+The native launcher binds to loopback and is for trusted local use. Docker provides the deployment network and resource isolation.
+
+## Run with Docker
 
 Use Docker Engine and Compose on Linux. Configure a private `.env` from `.env.example` and start the optional local admin UI.
 
@@ -40,7 +58,7 @@ Use Docker Engine and Compose on Linux. Configure a private `.env` from `.env.ex
 docker compose -f compose.yaml -f compose.ui.yaml up -d --build
 ```
 
-Open `http://127.0.0.1:3000` and unlock with `WEB_ADMIN_TOKEN`. Pair a dedicated secondary WhatsApp account only when approved. The dashboard shows connection status and the current job and offers a read-only download. From the owner account, send a video as a document or a photo as a document or HD image. Use `/help` or `/status` in chat. The deployment runbook also covers headless pairing. [Deployment runbook](docs/DEPLOYMENT.md)
+Open `http://127.0.0.1:3000` and unlock with `WEB_ADMIN_TOKEN`. Set the owner number in the UI, then pair a dedicated secondary WhatsApp account only when approved. The dashboard shows connection status and the current job and offers a read-only download. From the owner account, send a video as a document or a photo as a document or HD image. Use `/help` or `/status` in chat. The deployment runbook also covers headless pairing. [Deployment runbook](docs/DEPLOYMENT.md)
 
 The Compose smoke test uses generated media and runs without a WhatsApp session. Live trial and VPS verification are pending. See the [testing guide](docs/TESTING.md).
 
@@ -77,8 +95,8 @@ npm run build --prefix web
 | Component | Status | Evidence |
 | --- | --- | --- |
 | Rust media core & internal API | Verified locally | `cargo fmt --check`, `cargo clippy --locked --all-targets -- -D warnings`, and `cargo test --locked` pass (29 tests: 20 lib + 9 API/worker integration tests using generated SDR, HDR, and photo fixtures). |
-| Node.js WhatsApp sidecar | Verified with mocks | `npm test --prefix sidecar` passes (17 tests, including the control endpoint and pairing lifecycle). |
-| Local admin UI (`web/`) | Verified locally with fake upstreams | `npm test --prefix web` passes (8 tests), the production bundle builds, and headless Chrome exercised login, pairing, job status, and artifact downloads. |
+| Node.js WhatsApp sidecar | Verified with mocks | `npm test --prefix sidecar` passes (19 tests, including the control endpoint and pairing lifecycle). |
+| Local admin UI (`web/`) | Verified locally with fake upstreams | `npm test --prefix web` passes (9 tests), the production bundle builds, and headless Chrome exercised login, pairing, job status, and artifact downloads. |
 | Docker Compose & hardening | Pending Linux host | Requires a Linux Docker Engine + Compose host to run `docker compose config --quiet`, image builds, and `scripts/check-compose.sh`. |
 | Live WhatsApp & quality trial | Pending approval | No real WhatsApp account has been linked; device playback, Status recompression, and VPS deployment remain unverified. |
 

@@ -159,8 +159,9 @@ export async function createWeb({ config, dist, fetcher, now = Date.now }) {
       if (!session) return unauthorized()
 
       const pair = path === '/api/pair' && ['POST', 'DELETE'].includes(method)
+      const owner = path === '/api/owner' && method === 'POST'
       const logout = path === '/api/logout' && method === 'POST'
-      if (pair || logout) {
+      if (pair || owner || logout) {
         const retry = csrfFailures.retry(session.id, 20)
         if (retry) return limited(retry)
         if (!sameOrigin(req) || req.headersDistinct['x-csrf-token']?.length !== 1
@@ -174,16 +175,16 @@ export async function createWeb({ config, dist, fetcher, now = Date.now }) {
           csrfFailures.clear(session.id)
           return send(204)
         }
-        if (method === 'DELETE') return send(...await upstream.pair(method))
+        if (method === 'DELETE') return send(...await upstream.setup(false, method))
         const data = await body(req, res)
         if (!data || Object.keys(data).some((key) => key !== 'number')) return send(400, { error: 'invalid_request' })
-        if (Object.hasOwn(data, 'number') && (typeof data.number !== 'string' || !privateNumber.test(data.number))) {
-          return send(400, { error: 'invalid_number' })
+        if ((owner || Object.hasOwn(data, 'number')) && (typeof data.number !== 'string' || !privateNumber.test(data.number))) {
+          return send(400, { error: owner ? 'invalid_owner_number' : 'invalid_number' })
         }
         const cooldown = pairingStarts.retry(session.id, 5)
         if (cooldown) return limited(cooldown)
         pairingStarts.hit(session.id)
-        return send(...await upstream.pair(method, data))
+        return send(...await upstream.setup(owner, method, data))
       }
       if (method !== 'GET') return missing()
       if (path === '/api/session') return send(200, { authenticated: true, csrf: session.csrf })
