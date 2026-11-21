@@ -31,6 +31,14 @@ npm test --prefix sidecar
 
 Test owner allowlisting, group rejection, unknown senders, unsupported messages, message deduplication, download limits, reconnect behavior, ordered delivery, per-artifact acknowledgement, and bounded retries without connecting a real account.
 
+## Local admin checks
+
+Run `npm test --prefix sidecar`, `npm test --prefix web`, and `npm run build --prefix web` under Node.js 24. Use fake socket/control/API implementations and generated media. Automated tests must never link a real WhatsApp account or contain real numbers.
+
+Verify the private control listener, owner-number rejection, pinned and unpinned UI pairing, and redaction across success, expiry, cancellation, and wrong identity. Check that headless pairing and startup without control report `bot_number_required` for an empty number, and that configured base startup still reports `sidecar_pairing_required` if unpaired.
+
+With the UI overlay and fake upstreams, verify loopback publication and that the API and sidecar have no host ports. In the browser check unauthenticated rejection, failed-login throttling, the HttpOnly cookie, CSRF enforcement, and no third-party requests. Issue, cancel, and regenerate a fake pairing code, observe its countdown, and verify the code is absent from logs. Exercise job transitions and download the current artifact without acknowledging it. Confirm delivery and terminal routes are unavailable. Check keyboard navigation, mobile width, and that polling pauses while the tab is hidden.
+
 ## Deployment checks
 
 ```bash

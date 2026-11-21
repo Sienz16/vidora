@@ -31,6 +31,11 @@ export function openAuth(directory) {
       else write.run(category, id, JSON.stringify(value, BufferJSON.replacer))
     }
     const creds = get('creds', '') ?? initAuthCreds()
+    delete creds.pairingCode
+    const save = (value) => {
+      const { pairingCode, ...persistent } = value
+      put('creds', '', persistent)
+    }
     return {
       state: {
         creds,
@@ -56,7 +61,56 @@ export function openAuth(directory) {
           },
         },
       },
-      save: () => put('creds', '', creds),
+      save: () => save(creds),
+      beginPairing() {
+        if (creds.registered) throw new Error('session is registered')
+        const pending = initAuthCreds()
+        const keys = new Map()
+        return {
+          state: {
+            creds: pending,
+            keys: {
+              async get(category, ids) {
+                return Object.fromEntries(ids.map((id) => [id, keys.get(category)?.get(id)]))
+              },
+              async set(entries) {
+                for (const [category, entriesById] of Object.entries(entries)) {
+                  if (!keys.has(category)) keys.set(category, new Map())
+                  const values = keys.get(category)
+                  for (const [id, value] of Object.entries(entriesById)) {
+                    if (value == null) values.delete(id)
+                    else values.set(id, value)
+                  }
+                }
+              },
+            },
+          },
+          save() {},
+          commit() {
+            if (creds.registered || !pending.registered) throw new Error('invalid pairing state')
+            db.exec('BEGIN')
+            try {
+              db.exec('DELETE FROM entries')
+              save(pending)
+              for (const [category, values] of keys) {
+                for (const [id, value] of values) put(category, id, value)
+              }
+              db.exec('COMMIT')
+            } catch (error) {
+              db.exec('ROLLBACK')
+              throw error
+            }
+            delete pending.pairingCode
+            for (const key of Object.keys(creds)) delete creds[key]
+            Object.assign(creds, pending)
+          },
+          discard() {
+            keys.clear()
+            delete pending.pairingCode
+            if (!creds.registered) db.exec('DELETE FROM entries')
+          },
+        }
+      },
       close() {
         try {
           db.close()

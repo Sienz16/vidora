@@ -15,21 +15,30 @@ Encoding speed depends on the VPS CPU and source media. Keep one encode worker u
 
 - `api`: Rust service; no public host port.
 - `whatsapp`: Node.js/Baileys sidecar; no public host port.
-- Internal `processing` network for authenticated requests, attached to both services.
+- `web`: optional loopback admin UI. Only `127.0.0.1:${WEB_PORT:-3000}` is published.
+- Internal `processing` network for API requests.
+- Internal `control` network for the sidecar listener and the web service, with no API attachment. The Docker host is trusted and can reach bridge container IPs.
 - Separate `whatsapp-egress` network attached only to the sidecar.
+- Separate `web-ingress` bridge attached only to the UI for loopback port publishing, with IP masquerading disabled.
 - Separate persistent volumes for Rust data and Baileys authentication.
 
 No public web server is required for the bot workflow. Do not expose internal artifact URLs or management endpoints to the internet.
 
 ## Configuration
 
-Use a protected deployment secret store or a `0600` `.env` file. Copy `.env.example` to `.env` under `umask 077`. Generate the token with `openssl rand -hex 32` and set the three values with a local editor or secret manager. Enter phone numbers in international format. Keep the live values out of command history and chat. Docker administrators can read container environment variables, so restrict access to the Docker socket.
+Use a protected deployment secret store or a `0600` `.env` file. Copy `.env.example` to `.env` under `umask 077`. Generate each token independently with `openssl rand -hex 32` and set the values with a local editor or secret manager. Enter phone numbers in international format. Keep the live values out of command history and chat. Docker administrators can read container environment variables, so restrict access to the Docker socket.
 
 | Variable | Purpose |
 | --- | --- |
 | `OWNER_WHATSAPP_NUMBER` | Single owner allowed to submit jobs; store only in protected deployment configuration |
-| `BOT_WHATSAPP_NUMBER` | Dedicated secondary number used for controlled pairing |
-| `INTERNAL_API_TOKEN` | Random secret of at least 32 bytes shared only by the two services |
+| `BOT_WHATSAPP_NUMBER` | Optional identity pin with UI control. Leave empty to enter the secondary number in the UI. Required for headless pairing and startup without control. |
+| `WEB_ADMIN_TOKEN` | Independent admin secret with at least 32 printable non-space ASCII characters |
+| `SIDECAR_CONTROL_TOKEN` | Independent web-to-sidecar bearer secret with at least 32 printable non-space ASCII characters |
+| `WEB_PORT` | UI loopback host port, default 3000 |
+| `WEB_PUBLIC_ORIGIN` | Exact browser origin, default `http://127.0.0.1:3000`. Set when changing port, hostname, or scheme. |
+| `WEB_ALLOWED_HOSTS`, `WEB_COOKIE_SECURE` | Optional host allowlist and Secure cookies for HTTPS. Defaults derive the allowlist from the origin and local port 3000 names. |
+| `VIDORA_CONTROL_SUBNET`, `VIDORA_CONTROL_SIDECAR_IP`, `VIDORA_CONTROL_WEB_IP` | Override the control bridge subnet and addresses together if defaults overlap another network. Defaults are `172.30.250.0/24`, `172.30.250.2`, and `172.30.250.3`. |
+| `INTERNAL_API_TOKEN` | Random secret of at least 32 bytes shared by the API, sidecar, and optional web service |
 | `RUST_API_URL` | Set by Compose to `http://api:8080` |
 | `DATA_DIR` | API volume at `/var/lib/vidora` |
 | `BAILEYS_AUTH_DIR` | Sidecar-only session volume at `/var/lib/vidora-auth` |
@@ -48,9 +57,24 @@ The API enforces a 300 MiB upload cap, a 90-second upload deadline, a 20-minute 
 - Media cleanup, restart reconciliation, log redaction, and disk alerts are tested.
 - A rollback procedure exists that does not start two sidecars with the same session.
 
-## Controlled linking
+## Local admin UI
 
-Only after explicit approval:
+On the approved host, run:
+
+```sh
+docker compose -f compose.yaml -f compose.ui.yaml up -d --build
+```
+
+Open `http://127.0.0.1:3000`, unlock with `WEB_ADMIN_TOKEN`, then enter the dedicated secondary bot number if it is unpinned. Complete pairing on that phone only after explicit approval. Run `docker compose -f compose.yaml -f compose.ui.yaml ps` and send `/help` from the owner phone when connected. The sidecar can be unhealthy while unpaired. Start without `up --wait` until pairing is complete.
+
+For remote access, use an SSH local forward such as `ssh -N -L 3000:127.0.0.1:3000 user@host`, or private Tailscale Serve forwarding to loopback. For HTTPS, set the public origin to the HTTPS origin and `WEB_COOKIE_SECURE=1`. Keep the host bind on `127.0.0.1`.
+
+If the UI shows “Sidecar unreachable,” inspect service status and fixed sidecar event names. Check matching control tokens, the control bridge configuration, and whether the session was invalidated. `bot_number_required` means the sidecar needs a configured bot number in that startup mode.
+For a manual session reset, stop the sidecar, unlink the old session on the dedicated phone, and identify the exact Compose session volume. Back it up with encryption if needed, remove only that session volume after approval, then start one sidecar and pair again. Preserve the API media volume.
+
+## Headless pairing fallback
+
+Set `BOT_WHATSAPP_NUMBER` and proceed only after explicit approval:
 
 On the approved trial host, run these commands from the repository root using a private interactive terminal with recording disabled.
 

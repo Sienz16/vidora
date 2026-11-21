@@ -37,7 +37,7 @@ services:
       BAILEYS_AUTH_DIR: /var/lib/vidora-auth
       INTERNAL_API_TOKEN: ${INTERNAL_API_TOKEN:?set INTERNAL_API_TOKEN}
       OWNER_WHATSAPP_NUMBER: ${OWNER_WHATSAPP_NUMBER:?set OWNER_WHATSAPP_NUMBER}
-      BOT_WHATSAPP_NUMBER: ${BOT_WHATSAPP_NUMBER:?set BOT_WHATSAPP_NUMBER}
+      BOT_WHATSAPP_NUMBER: ${BOT_WHATSAPP_NUMBER:-}
       VIDORA_READY_FILE: /tmp/vidora-connected
     volumes:
       - session:/var/lib/vidora-auth

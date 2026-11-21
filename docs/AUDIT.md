@@ -63,19 +63,26 @@ Do not approve a phase if any of these apply:
 - Test graceful shutdown, restart reconciliation, disk pressure, and retention sweeps.
 - Inspect build context and images for secrets, session files, and media.
 
-## Phase 5 audit: secondary-account trial
+## Phase 5 audit: local admin UI
+
+- Verify that only the admin UI publishes a host port and that the address is `127.0.0.1`.
+- Check the sidecar control bind against its dedicated interface and test aborted pairing and code redaction.
+- Verify the Host allowlist, session cookies, CSRF and Origin checks, CSP, and rate limits.
+- Confirm the fixed read-only job route allowlist and authentication for artifact downloads.
+
+## Phase 6 audit: secondary-account trial
 
 - Confirm explicit approval and use of a dedicated secondary number.
 - Reproduce unauthorized-sender and group rejection on the live boundary.
 - Review manual test records and actual output metadata.
 - Check reconnect/restart behavior for duplicate delivery.
-- Compare quality claims with the recorded A/B/C matrix and app/device versions.
+- Compare quality claims with the recorded A–E matrix and app/device versions.
 - Inspect logs and retention after real media processing.
 
-## Phase 6 audit: VPS
+## Phase 7 audit: VPS
 
 - Record approved host, source revision, lockfiles, and deployed configuration.
-- Verify no public sidecar/API exposure and no unexpected services.
+- Verify the expected services are `api`, `whatsapp`, and optional loopback-only `web`. Confirm zero API and sidecar host port bindings.
 - Verify encrypted session backup handling and that only one sidecar uses the session.
 - Run smoke, authorization, cleanup, restart, and resource tests.
 - Confirm rollback cannot run two sessions simultaneously.

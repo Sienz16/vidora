@@ -1,12 +1,14 @@
 import process from 'node:process'
+import { once } from 'node:events'
 import { rmSync, writeFileSync } from 'node:fs'
 import { isAbsolute } from 'node:path'
 import { setTimeout as delay } from 'node:timers/promises'
-import { jidNormalizedUser } from '@whiskeysockets/baileys'
 import { createApi } from './api.mjs'
 import { openAuth } from './auth.mjs'
 import { createBot, phoneJid } from './bot.mjs'
-import { connect, invalidSession, restartRequired } from './whatsapp.mjs'
+import { controlConfig, createControl } from './control.mjs'
+import { configuredBot, createPairing, linkedBot } from './pairing.mjs'
+import { connect, invalidSession } from './whatsapp.mjs'
 
 const log = (event) => process.stderr.write(`${event}\n`)
 const args = process.argv.slice(2)
@@ -30,15 +32,19 @@ process.on('unhandledRejection', () => {
 })
 
 async function run() {
-  if ((!pairing && args.length > 0) || (pairing && !process.stdout.isTTY)) {
-    throw new Error('invalid invocation')
+  if (!pairing && args.length > 0) throw new Error('invalid invocation')
+  const { pinned, required } = configuredBot(process.env, pairing)
+  if (required && !pinned) {
+    log('bot_number_required')
+    return 1
   }
+  if (pairing && !process.stdout.isTTY) throw new Error('invalid invocation')
+  const control = pairing ? null : controlConfig(process.env)
   const owner = phoneJid(process.env.OWNER_WHATSAPP_NUMBER)
-  const botJid = phoneJid(process.env.BOT_WHATSAPP_NUMBER)
   const directory = process.env.BAILEYS_AUTH_DIR
   const token = process.env.INTERNAL_API_TOKEN
   const marker = process.env.VIDORA_READY_FILE
-  if (owner === botJid || !directory || !isAbsolute(directory)
+  if (owner === pinned || !directory || !isAbsolute(directory)
     || !token || !/^[!-~]{32,}$/.test(token)
     || (marker && !isAbsolute(marker))) throw new Error('invalid configuration')
   const online = (connected) => {
@@ -56,29 +62,40 @@ async function run() {
   const api = createApi(process.env.RUST_API_URL, token)
   const auth = openAuth(directory)
   const bot = createBot({ api, owner, stop: stopping.signal, log })
+  const stop = stopping.signal
+  const service = createPairing({ auth, owner, pinned, bot, stop, log })
+  let server
   try {
     const { creds } = auth.state
-    if (creds.me?.id && jidNormalizedUser(creds.me.id) !== botJid) throw new Error('wrong linked account')
-    if (!pairing && !creds.registered) {
+    if (creds.registered) linkedBot(auth, owner, pinned)
+    if (pairing) {
+      const error = service.start(undefined, (code) => process.stdout.write(`Pairing code: ${code}\n`))
+      if (error) throw new Error('pairing unavailable')
+      const outcome = await service.drain()
+      return outcome === 'paired' || stop.aborted ? 0 : 1
+    }
+    if (!control && !creds.registered) {
       log('sidecar_pairing_required')
       return 1
     }
-    const stop = pairing
-      ? AbortSignal.any([stopping.signal, AbortSignal.timeout(180_000)]) : stopping.signal
+    if (control) {
+      server = createControl({ token: control.token, pairing: service })
+      server.listen(control.port, control.host)
+      await once(server, 'listening')
+      if (!await service.waitForPair()) return 0
+    }
+    const botJid = linkedBot(auth, owner, pinned)
     let retry = 1_000
     while (!stop.aborted) {
       const { reason, opened } = await connect({
-        auth, botJid, bot, stop, log, online,
-        pairing: pairing ? (code) => process.stdout.write(`Pairing code: ${code}\n`) : undefined,
+        auth, botJid, bot, stop, log,
+        online(connected) {
+          service.online(connected)
+          online(connected)
+        },
       })
       await bot.drained()
-      if (reason === 'paired') {
-        auth.save()
-        log('pairing_completed')
-        return 0
-      }
-      if (invalidSession.has(reason) || reason === 'session_write_failed'
-        || (pairing && reason !== restartRequired && !stop.aborted)) {
+      if (invalidSession.has(reason) || reason === 'session_write_failed') {
         log('sidecar_session_unavailable')
         return 1
       }
@@ -88,9 +105,15 @@ async function run() {
         retry = Math.min(retry * 2, 30_000)
       }
     }
-    if (pairing && !stopping.signal.aborted) log('pairing_timed_out')
-    return pairing && !stopping.signal.aborted ? 1 : 0
+    return 0
   } finally {
+    if (server) {
+      const closed = new Promise((resolve) => server.close(resolve))
+      server.closeAllConnections()
+      await closed
+    }
+    service.cancel()
+    await service.drain()
     auth.close()
   }
 }

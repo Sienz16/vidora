@@ -25,6 +25,24 @@ check_limits() {
 
 "${compose[@]}" config --quiet
 "${compose[@]}" -f compose.yaml -f compose.pairing.yaml config --quiet
+ui_config() (
+  export WEB_ADMIN_TOKEN="$(openssl rand -hex 32)"
+  export SIDECAR_CONTROL_TOKEN="$(openssl rand -hex 32)"
+  export WEB_PORT=3000
+  "${compose[@]}" -f compose.yaml -f compose.ui.yaml config --quiet
+  "${compose[@]}" -f compose.yaml -f compose.ui.yaml config --format json |
+  docker run --rm -i --entrypoint node "$(docker inspect -f '{{.Image}}' "$sidecar_id")" -e '
+    const assert = require("node:assert/strict")
+    const { services, networks } = JSON.parse(require("node:fs").readFileSync(0, "utf8"))
+    assert.equal((services.api.ports ?? []).length, 0)
+    assert.equal((services.whatsapp.ports ?? []).length, 0)
+    assert.equal(services.web.ports.length, 1)
+    assert.equal(services.web.ports[0].host_ip, "127.0.0.1")
+    assert.equal(services.web.ports[0].target, 8080)
+    assert.ok(networks.control.internal)
+    assert.ok(!services.api.networks.control)
+  '
+)
 "${compose[@]}" up --build --wait api
 api_id=$("${compose[@]}" ps -q api)
 check_limits "$api_id" 10001 128 175000 2147483648
@@ -57,6 +75,7 @@ if unlinked=$(docker exec "$sidecar_id" node src/main.mjs 2>&1); then
   exit 1
 fi
 test "$unlinked" = sidecar_pairing_required
+ui_config
 
 "${compose[@]}" exec -T api ffmpeg -v error -f lavfi -i testsrc2=size=320x240:rate=24 \
   -t 1 -c:v libx264 -movflags +frag_keyframe+empty_moov -f mp4 pipe:1 |

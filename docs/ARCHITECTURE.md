@@ -64,6 +64,26 @@ The sidecar checks the direct chat's authenticated phone JID or its Baileys-prov
 
 The sidecar keeps authentication and Signal keys in its own SQLite database. An OS-backed SQLite lock prevents a second process from opening the same session, including during pairing. Session data and media remain on separate storage.
 
+## Local admin UI
+
+```text
+Browser → 127.0.0.1 host port → web
+                                ├─ processing → Rust API (read-only)
+                                └─ control → WhatsApp sidecar
+```
+
+The optional Node.js 24 web service serves a local Vue build and holds both upstream bearer tokens server-side. The Rust API contract and database are unchanged. The browser receives an admin session cookie and a CSRF token. It can view the active/latest job and download its currently available artifact.
+
+The sidecar enables the control server only with `SIDECAR_CONTROL_TOKEN`. It binds to the dedicated internal control interface in Compose and defaults to loopback outside the overlay. The Docker host is trusted and may reach bridge container IPs. The control server stays available through pairing and the normal connection loop.
+
+| Endpoint | Purpose |
+| --- | --- |
+| `GET /control/status` | Read masked connection and transient pairing status |
+| `POST /control/pair` | Start one bounded pairing attempt |
+| `DELETE /control/pair` | Cancel the active attempt |
+
+UI pairing accepts a submitted secondary number when no bot number is pinned. Normal startup without the control token and headless `--pair` require a configured number and report `bot_number_required` if absent. Registered sessions are verified against the pin when configured.
+
 ## Internal API
 
 Exact field schemas may be implemented in code, but preserve these semantics:
@@ -110,11 +130,14 @@ Do not place Baileys authentication inside the Rust media volume or container im
 
 ## Deployment boundary
 
-Docker Compose contains two services and two networks:
+Base Docker Compose uses two services. The optional UI overlay adds a third service and a dedicated internal control network.
 
 - `api`: Rust service, attached only to the `processing` network, with no public port.
 - `whatsapp`: Node.js sidecar, attached to `processing` and `whatsapp-egress`, with no public port.
+- `web`: optional admin service. Uses `processing` for the API and `control` for the sidecar. Its port is the only host publication and binds to loopback.
+- `control`: an internal bridge shared by `web` and `whatsapp`, without the API. Only the sidecar control interface listens on port 8090.
+- `web-ingress`: a bridge used only by `web` for Docker's loopback port publication. IP masquerading is disabled.
 - `processing`: an internal Compose network with no external network route.
 - `whatsapp-egress`: attached only to the sidecar so Baileys can reach WhatsApp.
 
-FFmpeg therefore runs without an external network route while the sidecar retains the connectivity it needs. An optional Tailscale-only administration endpoint can be added later. Public inbound access is unnecessary for the WhatsApp bot workflow.
+FFmpeg therefore runs without an external network route while the sidecar retains the connectivity it needs. Remote administration uses an encrypted tunnel to the loopback UI.

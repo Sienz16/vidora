@@ -1,0 +1,67 @@
+services:
+  whatsapp:
+    environment:
+      SIDECAR_CONTROL_TOKEN: ${SIDECAR_CONTROL_TOKEN:?set SIDECAR_CONTROL_TOKEN}
+      SIDECAR_CONTROL_BIND: ${VIDORA_CONTROL_SIDECAR_IP:-172.30.250.2}
+    networks:
+      control:
+        ipv4_address: ${VIDORA_CONTROL_SIDECAR_IP:-172.30.250.2}
+  web:
+    build:
+      context: ./web
+      target: production
+    init: true
+    read_only: true
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+    tmpfs:
+      - /tmp:rw,nosuid,nodev,noexec,size=16m,uid=65532,gid=65532,mode=0700
+    ports:
+      - "127.0.0.1:${WEB_PORT:-3000}:8080"
+    environment:
+      PORT: "8080"
+      WEB_BIND_IP: 0.0.0.0
+      WEB_PUBLIC_ORIGIN: ${WEB_PUBLIC_ORIGIN:-http://127.0.0.1:3000}
+      WEB_ADMIN_TOKEN: ${WEB_ADMIN_TOKEN:?set WEB_ADMIN_TOKEN}
+      WEB_ALLOWED_HOSTS:
+      WEB_COOKIE_SECURE:
+      WEB_SESSION_TTL_SECONDS:
+      RUST_API_URL: http://api:8080
+      INTERNAL_API_TOKEN: ${INTERNAL_API_TOKEN:?set INTERNAL_API_TOKEN}
+      SIDECAR_CONTROL_URL: http://${VIDORA_CONTROL_SIDECAR_IP:-172.30.250.2}:8090
+      SIDECAR_CONTROL_TOKEN: ${SIDECAR_CONTROL_TOKEN:?set SIDECAR_CONTROL_TOKEN}
+    networks:
+      processing: {}
+      control:
+        ipv4_address: ${VIDORA_CONTROL_WEB_IP:-172.30.250.3}
+      web-ingress:
+        gw_priority: 1
+    depends_on:
+      api:
+        condition: service_healthy
+      whatsapp:
+        condition: service_started
+    pids_limit: 64
+    cpus: 0.25
+    mem_limit: 256m
+    stop_grace_period: 10s
+    restart: unless-stopped
+    healthcheck:
+      test:
+        - CMD
+        - node
+        - -e
+        - 'fetch("http://127.0.0.1:8080/healthz", {headers: {host: new URL(process.env.WEB_PUBLIC_ORIGIN).host}, signal: AbortSignal.timeout(1500)}).then(r => { if (r.status !== 204) process.exitCode = 1 }).catch(() => { process.exitCode = 1 })'
+      interval: 10s
+      timeout: 3s
+      retries: 3
+networks:
+  control:
+    internal: true
+    ipam:
+      config:
+        - subnet: ${VIDORA_CONTROL_SUBNET:-172.30.250.0/24}
+  # Docker publishes ports through a default-gateway network.
+  web-ingress:
+    driver_opts:
+      com.docker.network.bridge.enable_ip_masquerade: "false"

@@ -31,6 +31,14 @@ The project does not guarantee that WhatsApp will skip recompression.
 - Allow one active job for the owner. Additional jobs receive a concise busy response.
 - Support `/help` and `/status`; no other commands are required for MVP.
 
+### Local admin UI
+
+- Provide an optional Compose overlay with a host port bound only to `127.0.0.1`.
+- Authenticate with `WEB_ADMIN_TOKEN`, an HttpOnly SameSite=Strict session cookie, and CSRF protection on authenticated mutations.
+- Pair through a private token-authenticated sidecar endpoint. Keep pairing codes transient and out of logs and storage.
+- Display connection status and the active or latest job. Proxy only the currently available artifact without acknowledging delivery.
+- Keep browser uploads, job submission, history, automatic Status posting, and multi-user access out of scope.
+
 ### Validation
 
 - Enforce a maximum declared and received input size of 300 MiB for videos and 50 MiB for photos.
@@ -72,7 +80,6 @@ The project does not guarantee that WhatsApp will skip recompression.
 
 - Automatic posting to WhatsApp Status
 - Public or multi-user access
-- A web interface
 - Photo-to-video (`photoAsVideo`), music, editing, stickers, or AI features
 - Copying PURESTATUS branding, proprietary code, or assets
 - Forced 60 fps output
@@ -93,3 +100,6 @@ MVP is accepted only when all of these are demonstrated:
 8. Automated tests and the manual quality matrix in `TESTING.md` pass, with device and WhatsApp versions recorded.
 9. No credentials, session data, personal media, or real phone numbers appear in the repository or logs.
 10. Documentation reports actual results without unsupported quality claims.
+11. The optional admin UI rejects unauthenticated requests, invalid CSRF, and unapproved hosts.
+12. Only the admin UI has a host port, bound to loopback. Pairing codes are never logged or persisted.
+13. The UI exposes no job submission, delivery acknowledgement, or terminal mutation.

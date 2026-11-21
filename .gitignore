@@ -4,3 +4,5 @@
 /baileys-auth/
 /.env
 /sidecar/node_modules/
+/web/node_modules/
+/web/dist/

@@ -18,7 +18,7 @@ Before changing files, read:
 - Build the clean-room bot described in the documents, not a PURESTATUS clone with copied code, branding, or assets.
 - Rust owns jobs, validation, FFmpeg, output metadata, and cleanup.
 - Node.js 24 owns only the Baileys WhatsApp connection and delivery.
-- Keep the bot single-owner and single-instance. Do not add public multi-tenancy, a web UI, AI features, image generation, automatic Status posting, or unrelated features.
+- Keep the bot single-owner and single-instance. A loopback-only admin UI is allowed for pairing, connection status, and read-only job monitoring. Bind its host port to `127.0.0.1` and use an encrypted SSH tunnel or Tailscale Serve for remote access. Do not add public deployment, multi-tenancy, AI features, image generation, automatic Status posting, or unrelated features.
 - Do not replace the Rust/Node boundary with Node-only or another stack without explicit user approval.
 
 ## Safety and privacy

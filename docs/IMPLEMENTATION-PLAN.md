@@ -54,7 +54,13 @@ Add:
 
 **Review evidence:** run the complete automated suite and inspect the effective Compose configuration. Fix all high-severity findings or document an accepted, justified exception with the user.
 
-## Phase 5 — Controlled secondary-account trial
+## Phase 5 — Local admin web UI
+
+The Phase 7 work order adds this implementation before the live trial. Provide an optional loopback Compose UI, private control for the existing sidecar, in-memory browser authentication, and read-only job and artifact views. Preserve base startup, the Rust API, and delivery behavior.
+
+**Review evidence:** automated control and web tests with fake upstreams, rendered browser checks, effective Compose ports and network isolation, and pairing-code redaction and cleanup. No live account is required.
+
+## Phase 6 — Controlled secondary-account trial
 
 Only after explicit approval to link a dedicated secondary number:
 
@@ -66,7 +72,7 @@ Only after explicit approval to link a dedicated secondary number:
 
 **Stop for audit:** review actual outputs, cleanup, logs, reconnection behavior, and quality evidence before VPS deployment.
 
-## Phase 6 — VPS deployment
+## Phase 7 — VPS deployment
 
 Only after explicit deployment approval:
 

@@ -62,6 +62,17 @@ Self-hosting reduces dependence on third-party apps but does not prove the syste
 - Review Baileys release changes and pin an explicit version; do not track an unpinned branch.
 - Generate dependency and container vulnerability reports during the security audit, while recognizing that scanners are not proof of safety.
 
+## Local admin security
+
+- Treat DNS rebinding, CSRF, XSS, local multi-user access, and pairing-code or credential disclosure as threats.
+- Publish only the UI on host IPv4 loopback. Validate every request Host against the configured allowlist. Use SSH or Tailscale Serve for encrypted remote access.
+- Store `WEB_ADMIN_TOKEN` in protected server configuration and memory. The UI sends the entered token only on login. Upstream bearer tokens stay on the server. Use a distinct `SIDECAR_CONTROL_TOKEN` and `INTERNAL_API_TOKEN`.
+- Use bounded in-memory sessions, HttpOnly SameSite=Strict cookies with Path=/, and Secure cookies when HTTPS is configured. Require the exact Origin and same-origin fetch metadata for mutations, and a CSRF token after login. Rate-limit login failures and pairing starts.
+- Serve local assets under strict CSP without inline scripts, HTML injection, or third-party requests. Return fixed errors without stack traces, upstream bodies, paths, or secrets.
+- Bind the control listener to its internal bridge IP or local loopback. Keep the Docker host trusted because it may reach bridge addresses. No sidecar port is published.
+- Reject owner-number pairing. A configured bot number pins the expected identity. Headless mode and startup without control require a number and report `bot_number_required` if it is missing.
+- Keep pairing codes in memory only. Clear them at cancellation, deadline, or completion. Stage pairing credentials until the bot identity is verified, then persist the session without the pairing code. Keep codes, tokens, full numbers, JIDs, cookies, and bodies out of logs.
+
 ## Security acceptance gate
 
-Do not deploy until tests demonstrate unauthorized-sender rejection, bounded uploads, no shell invocation, safe path handling, duplicate-message idempotency, process resource limits, no published internal ports, secret redaction, and cleanup after every terminal path.
+Do not deploy until tests demonstrate unauthorized-sender rejection, bounded uploads, no shell invocation, safe path handling, duplicate-message idempotency, process resource limits, no published internal ports, secret redaction, and cleanup after every terminal path. For the optional UI, also verify loopback publication, private control binding, Host and CSRF checks, CSP, route allowlisting, and pairing-code redaction.
