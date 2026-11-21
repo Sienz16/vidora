@@ -34,7 +34,13 @@ Replace `./sample.mp4` or `./sample.jpg` with your input video or photo. On succ
 
 ## Run the bot
 
-Use Docker Engine and Compose on Linux. Configure a private `.env` from `.env.example`, start the API, and pair a dedicated secondary WhatsApp account from a private terminal. After pairing, start the stack and send a video as a document or a photo (as a document or HD image) from the configured owner account. Use `/help` or `/status` in the chat. See the [deployment runbook](docs/DEPLOYMENT.md).
+Use Docker Engine and Compose on Linux. Configure a private `.env` from `.env.example` and start the optional local admin UI.
+
+```sh
+docker compose -f compose.yaml -f compose.ui.yaml up -d --build
+```
+
+Open `http://127.0.0.1:3000` and unlock with `WEB_ADMIN_TOKEN`. Pair a dedicated secondary WhatsApp account only when approved. The dashboard shows connection status and the current job and offers a read-only download. From the owner account, send a video as a document or a photo as a document or HD image. Use `/help` or `/status` in chat. The deployment runbook also covers headless pairing. [Deployment runbook](docs/DEPLOYMENT.md)
 
 The Compose smoke test uses generated media and runs without a WhatsApp session. Live trial and VPS verification are pending. See the [testing guide](docs/TESTING.md).
 
@@ -46,7 +52,8 @@ The Compose smoke test uses generated media and runs without a WhatsApp session.
 | 2 · Implemented | Rust, axum, SQLite | Authenticated internal API, durable jobs, and restart recovery |
 | 3 · Implemented | Node.js 24, Baileys | Owner-only WhatsApp access and ordered clip delivery |
 | 4 · Implemented | Docker Compose | Private networking, resource limits, and container hardening |
-| 5–6 · Pending live checks | Dedicated secondary WhatsApp account, VPS | Controlled quality trial followed by deployment |
+| 5 · Local admin UI | Node.js 24, Vue 3, Tailwind | Loopback pairing and read-only dashboard |
+| 6–7 · Pending live checks | Dedicated secondary WhatsApp account, VPS | Controlled quality trial followed by deployment |
 
 Rust owns media processing and job state. The Node.js sidecar holds the WhatsApp session and handles messaging. See the [architecture](docs/ARCHITECTURE.md) and the [phase review criteria](docs/IMPLEMENTATION-PLAN.md).
 
@@ -60,7 +67,20 @@ cargo clippy --locked --all-targets -- -D warnings
 cargo test --locked
 npm ci --prefix sidecar --ignore-scripts
 npm test --prefix sidecar
+npm ci --prefix web --ignore-scripts
+npm test --prefix web
+npm run build --prefix web
 ```
+
+## Verification status
+
+| Component | Status | Evidence |
+| --- | --- | --- |
+| Rust media core & internal API | Verified locally | `cargo fmt --check`, `cargo clippy --locked --all-targets -- -D warnings`, and `cargo test --locked` pass (29 tests: 20 lib + 9 API/worker integration tests using generated SDR, HDR, and photo fixtures). |
+| Node.js WhatsApp sidecar | Verified with mocks | `npm test --prefix sidecar` passes (10 tests against a mock Rust API and mocked Baileys boundary). |
+| Local admin UI (`web/`) | Unverified | Phase 5 files are in the working tree; `npm test --prefix web` currently has 0 tests and the production bundle/browser checks have not been run here. |
+| Docker Compose & hardening | Pending Linux host | Requires a Linux Docker Engine + Compose host to run `docker compose config --quiet`, image builds, and `scripts/check-compose.sh`. |
+| Live WhatsApp & quality trial | Pending approval | No real WhatsApp account has been linked; device playback, Status recompression, and VPS deployment remain unverified. |
 
 ## Read in this order
 
@@ -79,8 +99,8 @@ npm test --prefix sidecar
 
 - Use a dedicated secondary WhatsApp number, never the owner's primary number for the bot session.
 - Accept jobs only from an explicit owner allowlist; ignore groups and unknown senders.
+- Bind the admin UI to host loopback only.
 - Do not publish Status updates automatically.
-- Do not execute or install the downloaded PURESTATUS package.
 - Do not store media in third-party object storage or add analytics.
 - Do not claim quality improvements without recorded A/B tests.
 - Do not commit, push, deploy, install system prerequisites, or link a WhatsApp number without explicit user approval.
@@ -88,3 +108,10 @@ npm test --prefix sidecar
 ## Implementation handoff
 
 Commit each completed implementation phase separately, with test evidence and unresolved issues for review. Live linking and deployment have separate approval gates.
+
+## Disclaimer
+
+- **No affiliation:** Vidora is an independent, clean-room open-source project. It is not affiliated with, endorsed by, sponsored by, or officially supported by WhatsApp LLC, Meta Platforms, Inc., or any third-party application. All trademarks and product names belong to their respective owners.
+- **Unofficial protocol & account risk:** The optional WhatsApp sidecar uses [Baileys](https://github.com/WhiskeySockets/Baileys), an unofficial WhatsApp Web client library. Automating or connecting via unofficial clients may violate WhatsApp's Terms of Service and can lead to temporary restrictions, forced logouts, or permanent account bans. Use only a dedicated secondary number at your own risk.
+- **No quality or bypass guarantee:** Vidora prepares media with standard FFmpeg encoding profiles for manual posting or forwarding. It does not guarantee a WhatsApp compression bypass or improved visual quality on Status.
+- **No warranty / limitation of liability:** This software is provided **"AS IS"**, without warranty of any kind, express or implied. You are solely responsible for the content you process, compliance with applicable laws, copyright/privacy obligations, and platform terms. The authors and contributors shall not be liable for any damages, data loss, or account actions arising from use of this software.
