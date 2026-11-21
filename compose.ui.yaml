@@ -51,7 +51,7 @@ services:
         - CMD
         - node
         - -e
-        - 'fetch("http://127.0.0.1:8080/healthz", {headers: {host: new URL(process.env.WEB_PUBLIC_ORIGIN).host}, signal: AbortSignal.timeout(1500)}).then(r => { if (r.status !== 204) process.exitCode = 1 }).catch(() => { process.exitCode = 1 })'
+        - 'require("node:http").get("http://127.0.0.1:8080/healthz", {headers: {host: new URL(process.env.WEB_PUBLIC_ORIGIN).host}, signal: AbortSignal.timeout(1500)}, r => { r.resume(); if (r.statusCode !== 204) process.exitCode = 1 }).on("error", () => { process.exitCode = 1 })'
       interval: 10s
       timeout: 3s
       retries: 3

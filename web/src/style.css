@@ -1,0 +1,37 @@
+@import "tailwindcss";
+
+:root {
+  font-family: system-ui, sans-serif;
+  color-scheme: dark;
+  background: #0f1718;
+  color: #edf4ed;
+}
+
+.shell { max-width: 60rem; padding: 1.5rem clamp(1rem, 4vw, 2.5rem) 3rem; margin: auto; }
+.masthead { padding: 0.5rem 0 1.5rem; border-bottom: 1px solid #304040; margin-bottom: 1.5rem; }
+h1 { font-size: 1.75rem; font-weight: 700; letter-spacing: -0.06em; }
+h2 { font-size: 1.25rem; font-weight: 650; letter-spacing: -0.035em; }
+p, li { line-height: 1.55; }
+.panel { background: #182323; border: 1px solid #324443; border-radius: 1rem; padding: clamp(1rem, 4vw, 1.75rem); display: grid; gap: 1rem; }
+.login { max-width: 28rem; margin: clamp(2rem, 8vh, 6rem) auto 0; }
+.mark { display: flex; align-items: center; justify-content: center; gap: 3px; width: 2rem; height: 2rem; border-radius: 0.55rem; background: #c4f2a1; }
+.mark i { background: #172f23; width: 3px; height: 14px; border-radius: 3px; }
+.mark i:first-child, .mark i:last-child { height: 8px; }
+.pill { color: #d4e2dd; border: 1px solid #526664; border-radius: 2rem; padding: .25rem .7rem; font-size: .875rem; }
+.pill.connected { color: #c4f2a1; border-color: #79a76e; }
+.masked, .code { font-family: ui-monospace, monospace; }
+.masked, .muted { color: #adbfba; }
+label { font-weight: 550; }
+input { border: 1px solid #657c76; border-radius: .55rem; background: #121c1c; padding: .7rem .85rem; width: 100%; }
+.primary, .quiet { display: inline-flex; justify-content: center; align-items: center; min-height: 2.75rem; padding: .5rem 1rem; border-radius: .55rem; font-weight: 650; cursor: pointer; }
+.primary { background: #c4f2a1; color: #13261c; }
+.primary:hover { background: #dcf9c8; }
+.quiet { border: 1px solid #607772; color: #e6f1e9; }
+.quiet:hover { background: #263736; }
+button:disabled { opacity: .6; cursor: default; }
+:focus-visible { outline: 3px solid #dcf9c8; outline-offset: 3px; }
+.code-box { background: #101a1b; padding: 1rem; border-radius: .55rem; }
+.code { font-size: clamp(1.75rem, 7vw, 2.6rem); letter-spacing: .14em; color: #c4f2a1; }
+.error { color: #ffb9af; }
+.guide { list-style: disc; padding-left: 1.25rem; display: grid; gap: .5rem; }
+progress { width: 100%; accent-color: #c4f2a1; }

@@ -32,6 +32,7 @@ export function createPairing({
   const status = () => {
     const registered = Boolean(auth.state.creds.registered)
     const jid = registered ? linkedBot(auth, owner, pinned) : pinned
+    const seconds = pairing.code && current ? Math.ceil((current.deadline - Date.now()) / 1000) : 0
     return {
       paired: registered,
       connected,
@@ -39,9 +40,8 @@ export function createPairing({
       owner_configured: true,
       pairing: {
         ...pairing,
-        expires_in: pairing.code && current
-          ? Math.max(0, Math.ceil((current.deadline - Date.now()) / 1000))
-          : null,
+        code: seconds > 0 ? pairing.code : null,
+        expires_in: seconds > 0 ? seconds : null,
       },
     }
   }

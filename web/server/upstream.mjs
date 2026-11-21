@@ -20,7 +20,8 @@ function jpegThumbnail(value) {
 
 export function safeJob(job) {
   if (job === null) return null
-  if (!job || typeof job.id !== 'string' || !uuid.test(job.id) || !Object.hasOwn(mime, job.kind)
+  if (!job || typeof job.id !== 'string' || !uuid.test(job.id)
+    || typeof job.kind !== 'string' || !Object.hasOwn(mime, job.kind)
     || !jobStates.includes(job.state) || !Number.isInteger(job.next_index)
     || job.next_index < 0 || job.next_index > 32 || typeof job.pending !== 'boolean'
     || !Array.isArray(job.sizes) || job.sizes.length > 32

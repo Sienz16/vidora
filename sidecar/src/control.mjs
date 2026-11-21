@@ -19,7 +19,7 @@ export function controlConfig(env) {
 
 export function createControl({ token, pairing }) {
   const expected = hash(token)
-  return createServer({
+  const server = createServer({
     maxHeaderSize: 4096, requestTimeout: 5_000, headersTimeout: 5_000,
     connectionsCheckingInterval: 1000, keepAliveTimeout: 1000,
   }, async (req, res) => {
@@ -39,15 +39,29 @@ export function createControl({ token, pairing }) {
       res.setHeader('Allow', allowed.join(', '))
       return send(405, { error: 'method_not_allowed' })
     }
-    if (req.method === 'GET') return send(200, pairing.status())
+    if (req.method !== 'POST' && (req.headers['transfer-encoding'] || Number(req.headers['content-length']) > 0)) {
+      res.setHeader('Connection', 'close')
+      return send(400, { error: 'invalid_request' })
+    }
+    if (req.method === 'GET') {
+      try {
+        return send(200, pairing.status())
+      } catch {
+        return send(503, { error: 'unavailable' })
+      }
+    }
     if (req.method === 'DELETE') {
       const error = pairing.cancel()
       return error ? send(409, { error }) : send(204)
     }
-    if (!/^application\/json(?:\s*;\s*charset=utf-8)?$/i.test(req.headers['content-type'] ?? '')) {
+    if (req.headersDistinct['content-type']?.length !== 1
+      || !/^application\/json(?:\s*;\s*charset=utf-8)?$/i.test(req.headers['content-type'])) {
       return send(400, { error: 'invalid_request' })
     }
-    if (Number(req.headers['content-length']) > 1024) return send(413, { error: 'invalid_request' })
+    if (Number(req.headers['content-length']) > 1024) {
+      res.setHeader('Connection', 'close')
+      return send(413, { error: 'invalid_request' })
+    }
     let body
     try {
       const chunks = []
@@ -73,4 +87,6 @@ export function createControl({ token, pairing }) {
     if (!error) return send(202, { accepted: true })
     return send(['busy', 'already_paired'].includes(error) ? 409 : 400, { error })
   })
+  server.maxConnections = 16
+  return server
 }

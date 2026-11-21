@@ -60,6 +60,10 @@ export function readConfig(env) {
 async function body(req, res) {
   const contentType = req.headersDistinct['content-type']
   if (contentType?.length !== 1 || !/^application\/json(?:\s*;\s*charset=utf-8)?$/i.test(contentType[0])) return null
+  if (Number(req.headers['content-length']) > 1024) {
+    res.setHeader('Connection', 'close')
+    return null
+  }
   const chunks = []
   let size = 0
   for await (const chunk of req.iterator({ destroyOnReturn: false })) {
@@ -88,7 +92,7 @@ export async function createWeb({ config, dist, fetcher, now = Date.now }) {
   const sameOrigin = (req) => req.headersDistinct.origin?.length === 1 && req.headers.origin === config.origin
     && req.headersDistinct['sec-fetch-site']?.length === 1 && req.headers['sec-fetch-site'] === 'same-origin'
 
-  return createServer({
+  const server = createServer({
     maxHeaderSize: 8192, requestTimeout: 5_000, headersTimeout: 5_000,
     connectionsCheckingInterval: 1000, keepAliveTimeout: 2000,
   }, async (req, res) => {
@@ -191,4 +195,6 @@ export async function createWeb({ config, dist, fetcher, now = Date.now }) {
       return send(500, { error: 'unavailable' })
     }
   })
+  server.maxConnections = 64
+  return server
 }

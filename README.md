@@ -77,8 +77,8 @@ npm run build --prefix web
 | Component | Status | Evidence |
 | --- | --- | --- |
 | Rust media core & internal API | Verified locally | `cargo fmt --check`, `cargo clippy --locked --all-targets -- -D warnings`, and `cargo test --locked` pass (29 tests: 20 lib + 9 API/worker integration tests using generated SDR, HDR, and photo fixtures). |
-| Node.js WhatsApp sidecar | Verified with mocks | `npm test --prefix sidecar` passes (10 tests against a mock Rust API and mocked Baileys boundary). |
-| Local admin UI (`web/`) | Unverified | Phase 5 files are in the working tree; `npm test --prefix web` currently has 0 tests and the production bundle/browser checks have not been run here. |
+| Node.js WhatsApp sidecar | Verified with mocks | `npm test --prefix sidecar` passes (17 tests, including the control endpoint and pairing lifecycle). |
+| Local admin UI (`web/`) | Verified locally with fake upstreams | `npm test --prefix web` passes (8 tests), the production bundle builds, and headless Chrome exercised login, pairing, job status, and artifact downloads. |
 | Docker Compose & hardening | Pending Linux host | Requires a Linux Docker Engine + Compose host to run `docker compose config --quiet`, image builds, and `scripts/check-compose.sh`. |
 | Live WhatsApp & quality trial | Pending approval | No real WhatsApp account has been linked; device playback, Status recompression, and VPS deployment remain unverified. |
 
